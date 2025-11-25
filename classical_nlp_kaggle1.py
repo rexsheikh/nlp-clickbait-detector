@@ -1,5 +1,4 @@
 import random
-
 import csv
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 import re
@@ -100,7 +99,6 @@ def run_kaggle_experiments():
         y_test = [y[i] for i in test_idx]
         return X_train, X_test, y_train, y_test
 
-    # Prefer sklearn's splitter if available; otherwise use our stratified fallback
     try:
         from sklearn.model_selection import train_test_split as sk_split
         X_train, X_test, y_train, y_test = sk_split(
@@ -109,7 +107,7 @@ def run_kaggle_experiments():
     except Exception:
         X_train, X_test, y_train, y_test = _stratified_split(X_texts, y, test_size=0.2, random_state=42)
 
-    # NLTK Naive Bayes with boolean presence features over top-N vocab
+    # NLTK Naive Bayes for top-N vocab
     vocab = build_vocab_kaggle(X_train)
     def featurize(texts):
         return [document_features_kaggle(regex_tokenize(t), vocab) for t in texts]
@@ -117,7 +115,7 @@ def run_kaggle_experiments():
     train_set_k = list(zip(featurize(X_train), y_train))
     test_feats_k = featurize(X_test)
 
-    # Train and evaluate NLTK Naive Bayes
+    # Train and evaluate using nltk NaiveBayes
     try:
         from nltk.classify import NaiveBayesClassifier as NLTKNaiveBayes
         nb_k = NLTKNaiveBayes.train(train_set_k)
