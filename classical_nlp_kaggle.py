@@ -1,6 +1,6 @@
 import random
 import csv
-from sklearn.metrics import accuracy_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
 import re
 from collections import Counter
 
@@ -110,6 +110,99 @@ def document_features_kaggle(tokens, vocab):
     token_set = set(tokens)
     return {f"contains({w})": (w in token_set) for w in vocab}
 
+
+def print_top_lr_identifiers(pipeline, dataset_tag: str, top_k: int = 10):
+    """
+    Print top K positive and negative weighted n-grams learned by LogisticRegression.
+    Positive weights -> class 1 (clickbait); Negative weights -> class 0 (news).
+    """
+    try:
+        vec = pipeline.named_steps.get("tfidfvectorizer")
+        clf = pipeline.named_steps.get("logisticregression")
+        if vec is None or clf is None:
+            # Fallback: iterate steps to find by type name
+            for name, step in pipeline.named_steps.items():
+                if step.__class__.__name__.lower() == "tfidfvectorizer":
+                    vec = step
+                if step.__class__.__name__.lower() == "logisticregression":
+                    clf = step
+        if vec is None or clf is None:
+            print(f"[{dataset_tag}][LogReg] Unable to extract feature names or coefficients.")
+            return
+
+        feature_names = vec.get_feature_names_out()
+        coefs = clf.coef_[0]
+        # Top positive (clickbait indicators)
+        top_pos_idx = coefs.argsort()[-top_k:][::-1]
+        # Top negative (news indicators)
+        top_neg_idx = coefs.argsort()[:top_k]
+
+        print(f"[{dataset_tag}][LogReg] Top {top_k} clickbait indicators:")
+        for i in top_pos_idx:
+            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
+
+        print(f"[{dataset_tag}][LogReg] Top {top_k} news indicators:")
+        for i in top_neg_idx:
+            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
+    except Exception as e:
+        print(f"[{dataset_tag}][LogReg] Error printing top identifiers: {e}")
+
+
+def print_top_lr_identifiers_filtered(pipeline, dataset_tag: str, top_k: int = 10):
+    """
+    Filter out very common function words/pronouns to surface more informative terms.
+    Keeps numeric tokens and short tokens as requested.
+    """
+    try:
+        vec = pipeline.named_steps.get("tfidfvectorizer")
+        clf = pipeline.named_steps.get("logisticregression")
+        if vec is None or clf is None:
+            for _, step in pipeline.named_steps.items():
+                if step.__class__.__name__.lower() == "tfidfvectorizer":
+                    vec = step
+                if step.__class__.__name__.lower() == "logisticregression":
+                    clf = step
+        if vec is None or clf is None:
+            print(f"[{dataset_tag}][LogReg][Filtered] Unable to extract feature names or coefficients.")
+            return
+
+        feature_names = vec.get_feature_names_out()
+        coefs = clf.coef_[0]
+
+        IGNORE_TERMS = {
+            "the","a","an","this","that","these","those",
+            "you","your","yours","what","which","who","whom",
+            "and","or","but",
+            "to","of","for","in","on","at","by","with","about","as","from",
+            "is","are","was","were","be","been","being",
+            "have","has","had","do","does","did",
+            "it","its","they","them","their","theirs",
+            "we","us","our","ours","i","me","my","mine",
+            "he","him","his","she","her","hers",
+            "yourself","yourselves","ourselves","himself","herself","themselves"
+        }
+
+        # Keep features not in the ignore set. This only filters exact matches (mostly unigrams).
+        kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
+        if not kept_indices:
+            print(f"[{dataset_tag}][LogReg][Filtered] No terms left after filtering.")
+            return
+
+        # Sort by weight among kept indices
+        pos_sorted = sorted(kept_indices, key=lambda i: coefs[i], reverse=True)
+        neg_sorted = sorted(kept_indices, key=lambda i: coefs[i])
+
+        print(f"[{dataset_tag}][LogReg][Filtered] Top {top_k} clickbait indicators:")
+        for i in pos_sorted[:top_k]:
+            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
+
+        print(f"[{dataset_tag}][LogReg][Filtered] Top {top_k} news indicators:")
+        for i in neg_sorted[:top_k]:
+            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
+    except Exception as e:
+        print(f"[{dataset_tag}][LogReg][Filtered] Error printing top identifiers: {e}")
+
+
 def run_kaggle_experiments():
     print("\n=== Kaggle Clickbait Dataset ===")
     X_texts, y = load_kaggle_texts_labels()
@@ -161,6 +254,8 @@ def run_kaggle_experiments():
             f"Prec(pos)={precision_score(y_test, pred_nb, pos_label=1):.3f}  "
             f"Rec(pos)={recall_score(y_test, pred_nb, pos_label=1):.3f}"
         )
+        cm = confusion_matrix(y_test, pred_nb, labels=[0, 1])
+        print(f"[Kaggle][NLTK NaiveBayes] Confusion Matrix:\n{cm}")
     except Exception as e:
         print(f"[NLTK NaiveBayes] Error: {e}")
 
@@ -182,8 +277,35 @@ def run_kaggle_experiments():
             f"Prec(pos)={precision_score(y_test, preds, pos_label=1):.3f}  "
             f"Rec(pos)={recall_score(y_test, preds, pos_label=1):.3f}"
         )
+        cm = confusion_matrix(y_test, preds, labels=[0, 1])
+        print(f"[Kaggle][MultinomialNB] Confusion Matrix:\n{cm}")
     except Exception as e:
         print(f"[MultinomialNB] Error: {e}")
+
+    # Logistic Regression with TF-IDF (n-grams)
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import make_pipeline as mkpipe
+
+        lr_pipeline = mkpipe(
+            TfidfVectorizer(ngram_range=(1, 2), min_df=2),
+            LogisticRegression(max_iter=1000)
+        )
+        lr_pipeline.fit(X_train, y_train)
+        pred_lr = lr_pipeline.predict(X_test)
+        preds = pred_lr.tolist() if hasattr(pred_lr, "tolist") else pred_lr
+        print(
+            f"[Kaggle][LogReg]         Acc={accuracy_score(y_test, preds):.3f}  "
+            f"Prec(pos=clickbait)={precision_score(y_test, preds, pos_label=1):.3f}  "
+            f"Rec(pos=clickbait)={recall_score(y_test, preds, pos_label=1):.3f}"
+        )
+        cm = confusion_matrix(y_test, preds, labels=[0, 1])
+        print(f"[Kaggle][LogReg]         Confusion Matrix:\n{cm}")
+        print_top_lr_identifiers(lr_pipeline, "Kaggle", top_k=10)
+        print_top_lr_identifiers_filtered(lr_pipeline, "Kaggle", top_k=10)
+    except Exception as e:
+        print(f"[Kaggle][LogReg] Error: {e}")
 
 
 # ================= Train2 Naive Bayes + MultinomialNB (no shuffle) =================
@@ -218,6 +340,8 @@ def run_train2_experiments():
             f"Prec(pos)={precision_score(y_test, pred_nb, pos_label=1):.3f}  "
             f"Rec(pos)={recall_score(y_test, pred_nb, pos_label=1):.3f}"
         )
+        cm = confusion_matrix(y_test, pred_nb, labels=[0, 1])
+        print(f"[Train2][NLTK NaiveBayes] Confusion Matrix:\n{cm}")
     except Exception as e:
         print(f"[Train2][NLTK NaiveBayes] Error: {e}")
 
@@ -238,8 +362,35 @@ def run_train2_experiments():
             f"Prec(pos)={precision_score(y_test, preds, pos_label=1):.3f}  "
             f"Rec(pos)={recall_score(y_test, preds, pos_label=1):.3f}"
         )
+        cm = confusion_matrix(y_test, preds, labels=[0, 1])
+        print(f"[Train2][MultinomialNB] Confusion Matrix:\n{cm}")
     except Exception as e:
         print(f"[Train2][MultinomialNB] Error: {e}")
+
+    # Logistic Regression with TF-IDF (n-grams), no shuffle split (contiguous)
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import make_pipeline as mkpipe
+
+        lr_pipeline = mkpipe(
+            TfidfVectorizer(ngram_range=(1, 2), min_df=2),
+            LogisticRegression(max_iter=1000)
+        )
+        lr_pipeline.fit(X_train, y_train)
+        pred_lr = lr_pipeline.predict(X_test)
+        preds = pred_lr.tolist() if hasattr(pred_lr, "tolist") else pred_lr
+        print(
+            f"[Train2][LogReg]         Acc={accuracy_score(y_test, preds):.3f}  "
+            f"Prec(pos=clickbait)={precision_score(y_test, preds, pos_label=1):.3f}  "
+            f"Rec(pos=clickbait)={recall_score(y_test, preds, pos_label=1):.3f}"
+        )
+        cm = confusion_matrix(y_test, preds, labels=[0, 1])
+        print(f"[Train2][LogReg]         Confusion Matrix:\n{cm}")
+        print_top_lr_identifiers(lr_pipeline, "Train2", top_k=10)
+        print_top_lr_identifiers_filtered(lr_pipeline, "Train2", top_k=10)
+    except Exception as e:
+        print(f"[Train2][LogReg] Error: {e}")
 
 
 if __name__ == "__main__":
