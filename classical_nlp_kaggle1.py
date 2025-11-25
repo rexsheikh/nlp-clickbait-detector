@@ -6,6 +6,7 @@ from collections import Counter
 
 # constant path for kaggle dataset
 KAGGLE_DATASET_PATH = "/Users/rexsheikh/Documents/boulder-fall-2025/nlp/nlp-clickbait-detector/data/kaggle_clickbait.csv"
+TRAIN2_DATASET_PATH = "/Users/rexsheikh/Documents/boulder-fall-2025/nlp/nlp-clickbait-detector/data/news_clickbait_dataset/train2.csv"
 
 
 # Load the Kaggle clickbait dataset CSV and return counts for news and clickbait headlines
@@ -33,6 +34,41 @@ def load_data(path: str = KAGGLE_DATASET_PATH):
             elif label == 0:
                 news_0 += 1
     return clickbait_1, news_0
+
+
+# ================= Train2 loader and counters (label,text; no shuffle) =================
+
+def load_data_train2(path: str = TRAIN2_DATASET_PATH):
+    clickbait_1 = 0
+    news_0 = 0
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row or len(row) < 2:
+                continue
+            label = (row[0] or "").lstrip("\ufeff").strip().lower()
+            if label == "clickbait":
+                clickbait_1 += 1
+            elif label == "news":
+                news_0 += 1
+    return clickbait_1, news_0
+
+
+def load_train2_texts_labels(path: str = TRAIN2_DATASET_PATH):
+    texts, labels = [], []
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row or len(row) < 2:
+                continue
+            label = (row[0] or "").lstrip("\ufeff").strip().lower()
+            if label not in {"clickbait", "news"}:
+                continue
+            text = ",".join(row[1:]).strip()
+            y = 1 if label == "clickbait" else 0
+            texts.append(text)
+            labels.append(y)
+    return texts, labels
 
 
 # ================= Kaggle Naive Bayes + MultinomialNB =================
@@ -121,7 +157,7 @@ def run_kaggle_experiments():
         nb_k = NLTKNaiveBayes.train(train_set_k)
         pred_nb = [nb_k.classify(x) for x in test_feats_k]
         print(
-            f"[NLTK NaiveBayes] Acc={accuracy_score(y_test, pred_nb):.3f}  "
+            f"[Kaggle][NLTK NaiveBayes] Acc={accuracy_score(y_test, pred_nb):.3f}  "
             f"Prec(pos)={precision_score(y_test, pred_nb, pos_label=1):.3f}  "
             f"Rec(pos)={recall_score(y_test, pred_nb, pos_label=1):.3f}"
         )
@@ -142,7 +178,7 @@ def run_kaggle_experiments():
         # Ensure list for our metric helper
         preds = pred_mnb.tolist() if hasattr(pred_mnb, "tolist") else pred_mnb
         print(
-            f"[MultinomialNB]   Acc={accuracy_score(y_test, preds):.3f}  "
+            f"[Kaggle][MultinomialNB]   Acc={accuracy_score(y_test, preds):.3f}  "
             f"Prec(pos)={precision_score(y_test, preds, pos_label=1):.3f}  "
             f"Rec(pos)={recall_score(y_test, preds, pos_label=1):.3f}"
         )
@@ -150,9 +186,71 @@ def run_kaggle_experiments():
         print(f"[MultinomialNB] Error: {e}")
 
 
+# ================= Train2 Naive Bayes + MultinomialNB (no shuffle) =================
+def run_train2_experiments():
+    print("\n=== Train2 Dataset ===")
+    X_texts, y = load_train2_texts_labels()
+    if not X_texts or not y:
+        print("No data loaded from Train2 file; skipping experiments.")
+        return
+
+    # Deterministic contiguous 80/20 split, no shuffle
+    n = len(X_texts)
+    split = max(1, int(0.8 * n))
+    X_train, X_test = X_texts[:split], X_texts[split:]
+    y_train, y_test = y[:split], y[split:]
+
+    # NLTK Naive Bayes with boolean presence features over top-N vocab
+    vocab = build_vocab_kaggle(X_train)
+    def featurize(texts):
+        return [document_features_kaggle(regex_tokenize(t), vocab) for t in texts]
+
+    train_set_t2 = list(zip(featurize(X_train), y_train))
+    test_feats_t2 = featurize(X_test)
+
+    # Train and evaluate NLTK Naive Bayes
+    try:
+        from nltk.classify import NaiveBayesClassifier as NLTKNaiveBayes
+        nb_t2 = NLTKNaiveBayes.train(train_set_t2)
+        pred_nb = [nb_t2.classify(x) for x in test_feats_t2]
+        print(
+            f"[Train2][NLTK NaiveBayes] Acc={accuracy_score(y_test, pred_nb):.3f}  "
+            f"Prec(pos)={precision_score(y_test, pred_nb, pos_label=1):.3f}  "
+            f"Rec(pos)={recall_score(y_test, pred_nb, pos_label=1):.3f}"
+        )
+    except Exception as e:
+        print(f"[Train2][NLTK NaiveBayes] Error: {e}")
+
+    # sklearn MultinomialNB with CountVectorizer baseline
+    try:
+        from sklearn.feature_extraction.text import CountVectorizer
+        from sklearn.naive_bayes import MultinomialNB
+        from sklearn.pipeline import make_pipeline
+        mnb_pipeline = make_pipeline(
+            CountVectorizer(max_features=TOP_N_KAGGLE),
+            MultinomialNB()
+        )
+        mnb_pipeline.fit(X_train, y_train)
+        pred_mnb = mnb_pipeline.predict(X_test)
+        preds = pred_mnb.tolist() if hasattr(pred_mnb, "tolist") else pred_mnb
+        print(
+            f"[Train2][MultinomialNB]   Acc={accuracy_score(y_test, preds):.3f}  "
+            f"Prec(pos)={precision_score(y_test, preds, pos_label=1):.3f}  "
+            f"Rec(pos)={recall_score(y_test, preds, pos_label=1):.3f}"
+        )
+    except Exception as e:
+        print(f"[Train2][MultinomialNB] Error: {e}")
+
+
 if __name__ == "__main__":
+    # Kaggle dataset
     c1, c0 = load_data()
-    print(f"clickbait (label=1): {c1}")
-    print(f"news      (label=0): {c0}")
-    # Run Kaggle NB and MultinomialNB comparisons
+    print(f"[Kaggle] counts - clickbait (label=1): {c1}")
+    print(f"[Kaggle] counts - news      (label=0): {c0}")
     run_kaggle_experiments()
+
+    # Train2 dataset (no shuffle)
+    t1, t0 = load_data_train2()
+    print(f"[Train2] counts - clickbait (label=1): {t1}")
+    print(f"[Train2] counts - news      (label=0): {t0}")
+    run_train2_experiments()
