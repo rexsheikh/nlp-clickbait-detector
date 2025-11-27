@@ -1,211 +1,190 @@
 import random
 import csv
-from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, f1_score
 import re
+import json
+import datetime
 from collections import Counter
-import json, datetime
+from pathlib import Path
+from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, f1_score
 
-# constant path for kaggle dataset
-KAGGLE_DATASET_PATH = "/Users/rexsheikh/Documents/boulder-fall-2025/nlp/nlp-clickbait-detector/data/kaggle_clickbait.csv"
-TRAIN2_DATASET_PATH = "/Users/rexsheikh/Documents/boulder-fall-2025/nlp/nlp-clickbait-detector/data/news_clickbait_dataset/train2.csv"
+# === Data Setup ===
+# relative to project root, ensure that data is placed in data directory
+# reference readme for data download instructions
+ROOT = Path(__file__).parent
+DATA_DIR = ROOT / "data"
 
-
-# Load the Kaggle clickbait dataset CSV and return counts for news and clickbait headlines
-def load_data(path: str = KAGGLE_DATASET_PATH):
-    clickbait_1 = 0
-    news_0 = 0
-    with open(path, encoding="utf-8", errors="replace", newline="") as f:
-        reader = csv.DictReader(f)
-        # Handle potential BOM in first header cell
-        if reader.fieldnames:
-            reader.fieldnames = [
-                fn.lstrip("\ufeff") if isinstance(fn, str) else fn
-                for fn in reader.fieldnames
-            ]
-        for row in reader:
-            val = row.get("clickbait")
-            if val is None:
-                continue
-            try:
-                label = int(val)
-            except ValueError:
-                continue
-            if label == 1:
-                clickbait_1 += 1
-            elif label == 0:
-                news_0 += 1
-    return clickbait_1, news_0
+KAGGLE_DATASET_PATH = str(DATA_DIR / "kaggle_clickbait.csv")
+TRAIN2_DATASET_PATH = str(DATA_DIR / "news_clickbait_dataset" / "train2.csv")
 
 
-# ================= Train2 loader and counters (label,text; no shuffle) =================
-
-def load_data_train2(path: str = TRAIN2_DATASET_PATH):
-    clickbait_1 = 0
-    news_0 = 0
-    with open(path, encoding="utf-8", errors="replace", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row or len(row) < 2:
-                continue
-            label = (row[0] or "").lstrip("\ufeff").strip().lower()
-            if label == "clickbait":
-                clickbait_1 += 1
-            elif label == "news":
-                news_0 += 1
-    return clickbait_1, news_0
-
-
-def load_train2_texts_labels(path: str = TRAIN2_DATASET_PATH):
-    texts, labels = [], []
-    with open(path, encoding="utf-8", errors="replace", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row or len(row) < 2:
-                continue
-            label = (row[0] or "").lstrip("\ufeff").strip().lower()
-            if label not in {"clickbait", "news"}:
-                continue
-            text = ",".join(row[1:]).strip()
-            y = 1 if label == "clickbait" else 0
-            texts.append(text)
-            labels.append(y)
+# === Load Data ===
+# loader returning (texts, labels).
+# params: path (string), schema ("kaggle" or "train2")
+# return: texts (list of str), labels (list of int where 1=clickbait, 0=news)
+def load_texts_labels(path, schema):
+    texts = []
+    labels = []
+    if schema == "kaggle":
+        with open(path, encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                raw = row.get("clickbait")
+                text = row.get("headline")
+                if raw is None or text is None:
+                    continue
+                try:
+                    label = int(str(raw).strip().lower())
+                except Exception:
+                    continue
+                texts.append(str(text).strip())
+                labels.append(label)
+    elif schema == "train2":
+        with open(path, encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                raw = row.get("label")
+                text = row.get("title")
+                if raw is None or text is None:
+                    continue
+                label = str(raw).strip().lower()
+                label = 1 if label == "clickbait" else 0
+                texts.append(str(text).strip())
+                labels.append(label)
+    else:
+        raise ValueError(f"Unknown schema: {schema}")
     return texts, labels
 
 
-# ================= Kaggle Naive Bayes + MultinomialNB =================
+# sum class counts from labels produced by load_texts_labels.
+# params: path (string), schema ("kaggle" or "train2")
+# return dict (clickbait: clickbait count, news: news_count)
+def load_counts(path, schema):
+    _, labels = load_texts_labels(path, schema)
+    ctr = Counter(labels)
+    return {"clickbait": ctr.get(1,0), "news": ctr.get(0,0)}
 
-TOP_N_KAGGLE = 2000
 
-def regex_tokenize(text: str):
+# tokenization
+TOP_N_FEATURES = 2000
+
+
+# word-level tokenization
+# Input: text (string)
+# Output: list of tokens (list of str)
+def regex_tokenize(text):
     return re.findall(r"[A-Za-z0-9']+", (text or "").lower())
 
-def load_kaggle_texts_labels(path: str = KAGGLE_DATASET_PATH):
-    texts, labels = [], []
-    with open(path, encoding="utf-8", errors="replace", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames:
-            reader.fieldnames = [
-                fn.lstrip("\ufeff") if isinstance(fn, str) else fn
-                for fn in reader.fieldnames
-            ]
-        for row in reader:
-            headline = row.get("headline")
-            lb = row.get("clickbait")
-            if headline is None or lb is None:
-                continue
-            try:
-                y = int(lb)
-            except ValueError:
-                continue
-            texts.append(headline)
-            labels.append(y)
-    return texts, labels
 
-def build_vocab_kaggle(texts, top_n=TOP_N_KAGGLE):
+# gets top-N vocabulary from texts using regex_tokenize
+# params: texts (list of str), top_n (int)
+# return: vocab (list of str)
+def build_vocab(texts, top_n=TOP_N_FEATURES):
     cnt = Counter()
     for t in texts:
         cnt.update(regex_tokenize(t))
     return [w for w, _ in cnt.most_common(top_n)]
 
-def document_features_kaggle(tokens, vocab):
+
+# Map vocabulary presence into boolean feature dict.
+# Input: tokens (list of str), vocab (list of str)
+# Output: dict feature_name -> bool
+def document_features(tokens, vocab):
     token_set = set(tokens)
-    return {f"contains({w})": (w in token_set) for w in vocab}
+    return {f"document features contains({w})": (w in token_set) for w in vocab}
 
 
-def print_top_lr_identifiers(pipeline, dataset_tag: str, top_k: int = 10):
-    """
-    Print top K positive and negative weighted n-grams learned by LogisticRegression.
-    Positive weights -> class 1 (clickbait); Negative weights -> class 0 (news).
-    """
+# =====================================================================
+# Pipeline helpers and diagnostics
+# =====================================================================
+
+# Extract TfidfVectorizer and LogisticRegression from a sklearn Pipeline; tolerant of step names.
+# Input: pipeline (sklearn Pipeline)
+# Output: tuple (vectorizer, classifier) or (None, None)
+def get_vec_clf(pipeline):
+    vec = getattr(pipeline, "named_steps", {}).get("tfidfvectorizer")
+    clf = getattr(pipeline, "named_steps", {}).get("logisticregression")
+    if vec is None or clf is None:
+        for _, step in getattr(pipeline, "named_steps", {}).items():
+            n = step.__class__.__name__.lower()
+            if n == "tfidfvectorizer":
+                vec = step
+            if n == "logisticregression":
+                clf = step
+    return vec, clf
+
+
+# Print top positive/negative weighted features from a LogisticRegression pipeline.
+# Input: pipeline, dataset_tag (str), top_k (int), mode ("all"|"filtered"|"bigrams")
+# Output: prints to stdout
+def _print_top_lr_identifiers_core(pipeline, dataset_tag, top_k, mode):
     try:
-        vec = pipeline.named_steps.get("tfidfvectorizer")
-        clf = pipeline.named_steps.get("logisticregression")
+        vec, clf = get_vec_clf(pipeline)
         if vec is None or clf is None:
-            # Fallback: iterate steps to find by type name
-            for name, step in pipeline.named_steps.items():
-                if step.__class__.__name__.lower() == "tfidfvectorizer":
-                    vec = step
-                if step.__class__.__name__.lower() == "logisticregression":
-                    clf = step
-        if vec is None or clf is None:
-            print(f"[{dataset_tag}][LogReg] Unable to extract feature names or coefficients.")
-            return
-
-        feature_names = vec.get_feature_names_out()
-        coefs = clf.coef_[0]
-        # Top positive (clickbait indicators)
-        top_pos_idx = coefs.argsort()[-top_k:][::-1]
-        # Top negative (news indicators)
-        top_neg_idx = coefs.argsort()[:top_k]
-
-        print(f"[{dataset_tag}][LogReg] Top {top_k} clickbait indicators:")
-        for i in top_pos_idx:
-            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-
-        print(f"[{dataset_tag}][LogReg] Top {top_k} news indicators:")
-        for i in top_neg_idx:
-            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-    except Exception as e:
-        print(f"[{dataset_tag}][LogReg] Error printing top identifiers: {e}")
-
-
-def print_top_lr_identifiers_filtered(pipeline, dataset_tag: str, top_k: int = 10):
-    """
-    Filter out very common function words/pronouns to surface more informative terms.
-    Keeps numeric tokens and short tokens as requested.
-    """
-    try:
-        vec = pipeline.named_steps.get("tfidfvectorizer")
-        clf = pipeline.named_steps.get("logisticregression")
-        if vec is None or clf is None:
-            for _, step in pipeline.named_steps.items():
-                if step.__class__.__name__.lower() == "tfidfvectorizer":
-                    vec = step
-                if step.__class__.__name__.lower() == "logisticregression":
-                    clf = step
-        if vec is None or clf is None:
-            print(f"[{dataset_tag}][LogReg][Filtered] Unable to extract feature names or coefficients.")
+            print(f"[{dataset_tag}][LogReg][{mode}] Unable to extract feature names or coefficients.")
             return
 
         feature_names = vec.get_feature_names_out()
         coefs = clf.coef_[0]
 
-        IGNORE_TERMS = {
-            "the","a","an","this","that","these","those",
-            "you","your","yours","what","which","who","whom",
-            "and","or","but",
-            "to","of","for","in","on","at","by","with","about","as","from",
-            "is","are","was","were","be","been","being",
-            "have","has","had","do","does","did",
-            "it","its","they","them","their","theirs",
-            "we","us","our","ours","i","me","my","mine",
-            "he","him","his","she","her","hers",
-            "yourself","yourselves","ourselves","himself","herself","themselves"
-        }
+        if mode == "bigrams":
+            kept_indices = [i for i, name in enumerate(feature_names) if " " in name]
+        elif mode == "filtered":
+            IGNORE_TERMS = {
+                "the","a","an","this","that","these","those",
+                "you","your","yours","what","which","who","whom",
+                "and","or","but",
+                "to","of","for","in","on","at","by","with","about","as","from",
+                "is","are","was","were","be","been","being",
+                "have","has","had","do","does","did",
+                "it","its","they","them","their","theirs",
+                "we","us","our","ours","i","me","my","mine",
+                "he","him","his","she","her","hers",
+                "yourself","yourselves","ourselves","himself","herself","themselves"
+            }
+            kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
+        else:
+            kept_indices = list(range(len(feature_names)))
 
-        # Keep features not in the ignore set. This only filters exact matches (mostly unigrams).
-        kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
         if not kept_indices:
-            print(f"[{dataset_tag}][LogReg][Filtered] No terms left after filtering.")
+            print(f"[{dataset_tag}][LogReg][{mode}] No terms left after filtering.")
             return
 
-        # Sort by weight among kept indices
         pos_sorted = sorted(kept_indices, key=lambda i: coefs[i], reverse=True)
         neg_sorted = sorted(kept_indices, key=lambda i: coefs[i])
 
-        print(f"[{dataset_tag}][LogReg][Filtered] Top {top_k} clickbait indicators:")
+        print(f"[{dataset_tag}][LogReg][{mode}] Top {top_k} clickbait indicators:")
         for i in pos_sorted[:top_k]:
             print(f"  {feature_names[i]}: {coefs[i]:.4f}")
 
-        print(f"[{dataset_tag}][LogReg][Filtered] Top {top_k} news indicators:")
+        print(f"[{dataset_tag}][LogReg][{mode}] Top {top_k} news indicators:")
         for i in neg_sorted[:top_k]:
             print(f"  {feature_names[i]}: {coefs[i]:.4f}")
     except Exception as e:
-        print(f"[{dataset_tag}][LogReg][Filtered] Error printing top identifiers: {e}")
+        print(f"[{dataset_tag}][LogReg][{mode}] Error printing top identifiers: {e}")
 
 
-# ------------- Metrics Writer (JSONL) -------------
+# Backwards-compatible wrappers (keep existing names)
+def print_top_lr_identifiers(pipeline, dataset_tag, top_k=10):
+    _print_top_lr_identifiers_core(pipeline, dataset_tag, top_k, mode="all")
 
+
+def print_top_lr_identifiers_filtered(pipeline, dataset_tag, top_k=10):
+    _print_top_lr_identifiers_core(pipeline, dataset_tag, top_k, mode="filtered")
+
+
+def print_top_lr_identifiers_bigrams_only(pipeline, dataset_tag, top_k=10):
+    _print_top_lr_identifiers_core(pipeline, dataset_tag, top_k, mode="bigrams")
+
+
+# =====================================================================
+# Metrics Writer (JSONL)
+# =====================================================================
+
+# Append a JSON record for either a holdout evaluation (y_true/y_pred provided)
+# or a CV-best summary (best_f1/params provided).
+# Input: dataset (str), split ("holdout"|"cv-best"), model (str), variant (str),
+#        y_true/y_pred for holdout OR best_f1/params for CV; path to JSONL file.
+# Output: appends one JSON line to the metrics file.
 def write_metrics_record(
     dataset,
     split,
@@ -217,10 +196,6 @@ def write_metrics_record(
     params=None,
     path="metrics.jsonl",
 ):
-    """
-    Append a JSON record for either a holdout evaluation (y_true/y_pred provided)
-    or a CV-best summary (best_f1/params provided).
-    """
     record = {
         "dataset": dataset,
         "split": split,  # "holdout" or "cv-best"
@@ -256,69 +231,98 @@ def write_metrics_record(
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def run_kaggle_experiments():
-    print("\n=== Kaggle Clickbait Dataset ===")
-    X_texts, y = load_kaggle_texts_labels()
-    if not X_texts or not y:
-        print("No data loaded from Kaggle file; skipping experiments.")
-        return
+# Standardized evaluation printing + JSONL recording for holdout predictions.
+# Input: dataset_tag (str), model_name (str), variant (str), y_true, y_pred, path (str)
+# Output: prints metrics and writes one JSONL record.
+def evaluate_and_record(dataset_tag, model_name, variant, y_true, y_pred, path="metrics.jsonl"):
+    preds = y_pred.tolist() if hasattr(y_pred, "tolist") else y_pred
+    print(
+        f"[{dataset_tag}][{model_name}]   Acc={accuracy_score(y_true, preds):.3f}  "
+        f"Prec(pos)={precision_score(y_true, preds, pos_label=1):.3f}  "
+        f"Rec(pos)={recall_score(y_true, preds, pos_label=1):.3f}"
+    )
+    cm = confusion_matrix(y_true, preds, labels=[0, 1])
+    print(f"[{dataset_tag}][{model_name}] Confusion Matrix:\n{cm}")
+    write_metrics_record(
+        dataset=dataset_tag,
+        split="holdout",
+        model=model_name,
+        variant=variant,
+        y_true=y_true,
+        y_pred=preds,
+        path=path,
+    )
 
 
-    def _stratified_split(X, y, test_size=0.2, random_state=42):
-        rnd = random.Random(random_state)
-        by_class = {}
-        for i, label in enumerate(y):
-            by_class.setdefault(label, []).append(i)
-        train_idx, test_idx = [], []
-        for _, idxs in by_class.items():
-            rnd.shuffle(idxs)
-            n_test = max(1, int(len(idxs) * test_size)) if len(idxs) > 0 else 0
-            test_idx.extend(idxs[:n_test])
-            train_idx.extend(idxs[n_test:])
-        X_train = [X[i] for i in train_idx]
-        X_test = [X[i] for i in test_idx]
-        y_train = [y[i] for i in train_idx]
-        y_test = [y[i] for i in test_idx]
-        return X_train, X_test, y_train, y_test
+# =====================================================================
+# Train/test split helpers
+# =====================================================================
 
+def _stratified_split_fallback(X, y, test_size=0.2, random_state=42):
+    rnd = random.Random(random_state)
+    by_class = {}
+    for i, label in enumerate(y):
+        by_class.setdefault(label, []).append(i)
+    train_idx, test_idx = [], []
+    for _, idxs in by_class.items():
+        rnd.shuffle(idxs)
+        n_test = max(1, int(len(idxs) * test_size)) if len(idxs) > 0 else 0
+        test_idx.extend(idxs[:n_test])
+        train_idx.extend(idxs[n_test:])
+    X_train = [X[i] for i in train_idx]
+    X_test = [X[i] for i in test_idx]
+    y_train = [y[i] for i in train_idx]
+    y_test = [y[i] for i in test_idx]
+    return X_train, X_test, y_train, y_test
+
+
+def stratified_holdout(X, y, test_size=0.2, random_state=42):
     try:
         from sklearn.model_selection import train_test_split as sk_split
-        X_train, X_test, y_train, y_test = sk_split(
-            X_texts, y, test_size=0.2, stratify=y, random_state=42
-        )
+        return sk_split(X, y, test_size=test_size, stratify=y, random_state=random_state)
     except Exception:
-        X_train, X_test, y_train, y_test = _stratified_split(X_texts, y, test_size=0.2, random_state=42)
+        return _stratified_split_fallback(X, y, test_size=test_size, random_state=random_state)
 
-    # NLTK Naive Bayes for top-N vocab
-    vocab = build_vocab_kaggle(X_train)
+
+def contiguous_holdout(X, y, frac=0.2):
+    n = len(X)
+    k = max(1, int(n * (1 - frac)))
+    return X[:k], X[k:], y[:k], y[k:]
+
+
+# =====================================================================
+# Experiment runners
+# =====================================================================
+
+# Run baseline experiments (NLTK NB, MNB, LogReg) on holdout split.
+# Input: X_texts (list of str), y (list of int), dataset_tag (str), split ("stratified" or "contiguous")
+# Output: prints metrics and writes JSONL records.
+def run_experiments(X_texts, y, dataset_tag, split):
+    if not X_texts or not y:
+        print(f"No data loaded from {dataset_tag} file; skipping experiments.")
+        return
+
+    if split == "stratified":
+        X_train, X_test, y_train, y_test = stratified_holdout(X_texts, y, test_size=0.2, random_state=42)
+    else:
+        X_train, X_test, y_train, y_test = contiguous_holdout(X_texts, y, frac=0.2)
+
+    # Boolean presence features over a top-N vocab
+    vocab = build_vocab(X_train)
+
     def featurize(texts):
-        return [document_features_kaggle(regex_tokenize(t), vocab) for t in texts]
+        return [document_features(regex_tokenize(t), vocab) for t in texts]
 
-    train_set_k = list(zip(featurize(X_train), y_train))
-    test_feats_k = featurize(X_test)
-
-    # Train and evaluate using nltk NaiveBayes
+    # NLTK Naive Bayes
     try:
         from nltk.classify import NaiveBayesClassifier as NLTKNaiveBayes
-        nb_k = NLTKNaiveBayes.train(train_set_k)
-        pred_nb = [nb_k.classify(x) for x in test_feats_k]
-        print(
-            f"[Kaggle][NLTK NaiveBayes] Acc={accuracy_score(y_test, pred_nb):.3f}  "
-            f"Prec(pos)={precision_score(y_test, pred_nb, pos_label=1):.3f}  "
-            f"Rec(pos)={recall_score(y_test, pred_nb, pos_label=1):.3f}"
-        )
-        cm = confusion_matrix(y_test, pred_nb, labels=[0, 1])
-        print(f"[Kaggle][NLTK NaiveBayes] Confusion Matrix:\n{cm}")
-        write_metrics_record(
-            dataset="Kaggle",
-            split="holdout",
-            model="NLTK_NB",
-            variant="baseline_topN",
-            y_true=y_test,
-            y_pred=pred_nb,
-        )
+        train_set = list(zip(featurize(X_train), y_train))
+        test_feats = featurize(X_test)
+        nb = NLTKNaiveBayes.train(train_set)
+        pred_nb = [nb.classify(x) for x in test_feats]
+        evaluate_and_record(dataset_tag, "NLTK_NB", "baseline_topN", y_test, pred_nb)
     except Exception as e:
-        print(f"[NLTK NaiveBayes] Error: {e}")
+        print(f"[{dataset_tag}][NLTK NaiveBayes] Error: {e}")
 
     # sklearn MultinomialNB with CountVectorizer baseline
     try:
@@ -326,30 +330,14 @@ def run_kaggle_experiments():
         from sklearn.naive_bayes import MultinomialNB
         from sklearn.pipeline import make_pipeline
         mnb_pipeline = make_pipeline(
-            CountVectorizer(max_features=TOP_N_KAGGLE),
+            CountVectorizer(max_features=TOP_N_FEATURES),
             MultinomialNB()
         )
         mnb_pipeline.fit(X_train, y_train)
         pred_mnb = mnb_pipeline.predict(X_test)
-        # Ensure list for our metric helper
-        preds = pred_mnb.tolist() if hasattr(pred_mnb, "tolist") else pred_mnb
-        print(
-            f"[Kaggle][MultinomialNB]   Acc={accuracy_score(y_test, preds):.3f}  "
-            f"Prec(pos)={precision_score(y_test, preds, pos_label=1):.3f}  "
-            f"Rec(pos)={recall_score(y_test, preds, pos_label=1):.3f}"
-        )
-        cm = confusion_matrix(y_test, preds, labels=[0, 1])
-        print(f"[Kaggle][MultinomialNB] Confusion Matrix:\n{cm}")
-        write_metrics_record(
-            dataset="Kaggle",
-            split="holdout",
-            model="MNB",
-            variant="count_maxfeat_topN",
-            y_true=y_test,
-            y_pred=preds,
-        )
+        evaluate_and_record(dataset_tag, "MNB", "count_maxfeat_topN", y_test, pred_mnb)
     except Exception as e:
-        print(f"[MultinomialNB] Error: {e}")
+        print(f"[{dataset_tag}][MultinomialNB] Error: {e}")
 
     # Logistic Regression with TF-IDF (n-grams)
     try:
@@ -363,177 +351,24 @@ def run_kaggle_experiments():
         )
         lr_pipeline.fit(X_train, y_train)
         pred_lr = lr_pipeline.predict(X_test)
-        preds = pred_lr.tolist() if hasattr(pred_lr, "tolist") else pred_lr
-        print(
-            f"[Kaggle][LogReg]         Acc={accuracy_score(y_test, preds):.3f}  "
-            f"Prec(pos=clickbait)={precision_score(y_test, preds, pos_label=1):.3f}  "
-            f"Rec(pos=clickbait)={recall_score(y_test, preds, pos_label=1):.3f}"
-        )
-        cm = confusion_matrix(y_test, preds, labels=[0, 1])
-        print(f"[Kaggle][LogReg]         Confusion Matrix:\n{cm}")
-        write_metrics_record(
-            dataset="Kaggle",
-            split="holdout",
-            model="LogReg",
-            variant="tfidf_ng12_min2",
-            y_true=y_test,
-            y_pred=preds,
-        )
-        print_top_lr_identifiers(lr_pipeline, "Kaggle", top_k=10)
-        print_top_lr_identifiers_filtered(lr_pipeline, "Kaggle", top_k=10)
+        evaluate_and_record(dataset_tag, "LogReg", "tfidf_ng12_min2", y_test, pred_lr)
+
+        # Diagnostics
+        print_top_lr_identifiers(lr_pipeline, dataset_tag, top_k=10)
+        print_top_lr_identifiers_filtered(lr_pipeline, dataset_tag, top_k=10)
+        print_top_lr_identifiers_bigrams_only(lr_pipeline, dataset_tag, top_k=10)
     except Exception as e:
-        print(f"[Kaggle][LogReg] Error: {e}")
+        print(f"[{dataset_tag}][LogReg] Error: {e}")
 
 
-# ================= Train2 Naive Bayes + MultinomialNB (no shuffle) =================
-def run_train2_experiments():
-    print("\n=== Train2 Dataset ===")
-    X_texts, y = load_train2_texts_labels()
-    if not X_texts or not y:
-        print("No data loaded from Train2 file; skipping experiments.")
-        return
-
-    # Deterministic contiguous 80/20 split, no shuffle
-    n = len(X_texts)
-    split = max(1, int(0.8 * n))
-    X_train, X_test = X_texts[:split], X_texts[split:]
-    y_train, y_test = y[:split], y[split:]
-
-    # NLTK Naive Bayes with boolean presence features over top-N vocab
-    vocab = build_vocab_kaggle(X_train)
-    def featurize(texts):
-        return [document_features_kaggle(regex_tokenize(t), vocab) for t in texts]
-
-    train_set_t2 = list(zip(featurize(X_train), y_train))
-    test_feats_t2 = featurize(X_test)
-
-    # Train and evaluate NLTK Naive Bayes
+# Run Stratified K-Fold CV grid searches for LR and MNB.
+# Input: X_texts (list of str), y (list of int), dataset_tag (str), shuffle (bool)
+# Output: prints best scores/params and writes JSONL records.
+def run_cv_grid(X_texts, y, dataset_tag, shuffle):
+    print(f"\n=== {dataset_tag} CV + Grid (LR/MNB) ===")
     try:
-        from nltk.classify import NaiveBayesClassifier as NLTKNaiveBayes
-        nb_t2 = NLTKNaiveBayes.train(train_set_t2)
-        pred_nb = [nb_t2.classify(x) for x in test_feats_t2]
-        print(
-            f"[Train2][NLTK NaiveBayes] Acc={accuracy_score(y_test, pred_nb):.3f}  "
-            f"Prec(pos)={precision_score(y_test, pred_nb, pos_label=1):.3f}  "
-            f"Rec(pos)={recall_score(y_test, pred_nb, pos_label=1):.3f}"
-        )
-        cm = confusion_matrix(y_test, pred_nb, labels=[0, 1])
-        print(f"[Train2][NLTK NaiveBayes] Confusion Matrix:\n{cm}")
-        write_metrics_record(
-            dataset="Train2",
-            split="holdout",
-            model="NLTK_NB",
-            variant="baseline_topN",
-            y_true=y_test,
-            y_pred=pred_nb,
-        )
-    except Exception as e:
-        print(f"[Train2][NLTK NaiveBayes] Error: {e}")
-
-    # sklearn MultinomialNB with CountVectorizer baseline
-    try:
-        from sklearn.feature_extraction.text import CountVectorizer
-        from sklearn.naive_bayes import MultinomialNB
-        from sklearn.pipeline import make_pipeline
-        mnb_pipeline = make_pipeline(
-            CountVectorizer(max_features=TOP_N_KAGGLE),
-            MultinomialNB()
-        )
-        mnb_pipeline.fit(X_train, y_train)
-        pred_mnb = mnb_pipeline.predict(X_test)
-        preds = pred_mnb.tolist() if hasattr(pred_mnb, "tolist") else pred_mnb
-        print(
-            f"[Train2][MultinomialNB]   Acc={accuracy_score(y_test, preds):.3f}  "
-            f"Prec(pos)={precision_score(y_test, preds, pos_label=1):.3f}  "
-            f"Rec(pos)={recall_score(y_test, preds, pos_label=1):.3f}"
-        )
-        cm = confusion_matrix(y_test, preds, labels=[0, 1])
-        print(f"[Train2][MultinomialNB] Confusion Matrix:\n{cm}")
-        write_metrics_record(
-            dataset="Train2",
-            split="holdout",
-            model="MNB",
-            variant="count_maxfeat_topN",
-            y_true=y_test,
-            y_pred=preds,
-        )
-    except Exception as e:
-        print(f"[Train2][MultinomialNB] Error: {e}")
-
-    # Logistic Regression with TF-IDF (n-grams), no shuffle split (contiguous)
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.pipeline import make_pipeline as mkpipe
-
-        lr_pipeline = mkpipe(
-            TfidfVectorizer(ngram_range=(1, 2), min_df=2),
-            LogisticRegression(max_iter=1000)
-        )
-        lr_pipeline.fit(X_train, y_train)
-        pred_lr = lr_pipeline.predict(X_test)
-        preds = pred_lr.tolist() if hasattr(pred_lr, "tolist") else pred_lr
-        print(
-            f"[Train2][LogReg]         Acc={accuracy_score(y_test, preds):.3f}  "
-            f"Prec(pos=clickbait)={precision_score(y_test, preds, pos_label=1):.3f}  "
-            f"Rec(pos=clickbait)={recall_score(y_test, preds, pos_label=1):.3f}"
-        )
-        cm = confusion_matrix(y_test, preds, labels=[0, 1])
-        print(f"[Train2][LogReg]         Confusion Matrix:\n{cm}")
-        write_metrics_record(
-            dataset="Train2",
-            split="holdout",
-            model="LogReg",
-            variant="tfidf_ng12_min2",
-            y_true=y_test,
-            y_pred=preds,
-        )
-        print_top_lr_identifiers(lr_pipeline, "Train2", top_k=10)
-        print_top_lr_identifiers_filtered(lr_pipeline, "Train2", top_k=10)
-    except Exception as e:
-        print(f"[Train2][LogReg] Error: {e}")
-
-
-def print_top_lr_identifiers_bigrams_only(pipeline, dataset_tag: str, top_k: int = 10):
-    """
-    Show only bigram indicators (features containing a space) from LogisticRegression.
-    """
-    try:
-        vec = pipeline.named_steps.get("tfidfvectorizer")
-        clf = pipeline.named_steps.get("logisticregression")
-        if vec is None or clf is None:
-            for _, step in pipeline.named_steps.items():
-                if step.__class__.__name__.lower() == "tfidfvectorizer":
-                    vec = step
-                if step.__class__.__name__.lower() == "logisticregression":
-                    clf = step
-        if vec is None or clf is None:
-            print(f"[{dataset_tag}][LogReg][BigramsOnly] Unable to extract feature names or coefficients.")
-            return
-        feature_names = vec.get_feature_names_out()
-        coefs = clf.coef_[0]
-        # Indices of features that are bigrams (space-separated)
-        bigram_indices = [i for i, name in enumerate(feature_names) if " " in name]
-        if not bigram_indices:
-            print(f"[{dataset_tag}][LogReg][BigramsOnly] No bigram features present.")
-            return
-        pos_sorted = sorted(bigram_indices, key=lambda i: coefs[i], reverse=True)
-        neg_sorted = sorted(bigram_indices, key=lambda i: coefs[i])
-        print(f"[{dataset_tag}][LogReg][BigramsOnly] Top {top_k} clickbait indicators:")
-        for i in pos_sorted[:top_k]:
-            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-        print(f"[{dataset_tag}][LogReg][BigramsOnly] Top {top_k} news indicators:")
-        for i in neg_sorted[:top_k]:
-            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-    except Exception as e:
-        print(f"[{dataset_tag}][LogReg][BigramsOnly] Error: {e}")
-
-
-def run_kaggle_cv_grid():
-    print("\n=== Kaggle CV + Grid (LR/MNB) ===")
-    try:
-        X_texts, y = load_kaggle_texts_labels()
         from sklearn.model_selection import StratifiedKFold, GridSearchCV
+
         # Logistic Regression TF-IDF pipeline/grid
         try:
             from sklearn.feature_extraction.text import TfidfVectorizer
@@ -550,26 +385,25 @@ def run_kaggle_cv_grid():
                 "logisticregression__C": [0.5, 1.0, 2.0],
                 "logisticregression__class_weight": [None, "balanced"],
             }
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            cv = StratifiedKFold(n_splits=5, shuffle=shuffle, random_state=42 if shuffle else None)
             lr_search = GridSearchCV(lr_pipe, lr_grid, cv=cv, scoring="f1", n_jobs=None)
             lr_search.fit(X_texts, y)
-            print(f"[Kaggle][LogReg][CV] best_f1={lr_search.best_score_:.3f}")
-            print(f"[Kaggle][LogReg][CV] best_params={lr_search.best_params_}")
+            print(f"[{dataset_tag}][LogReg][CV] best_f1={lr_search.best_score_:.3f}")
+            print(f"[{dataset_tag}][LogReg][CV] best_params={lr_search.best_params_}")
             write_metrics_record(
-                dataset="Kaggle",
+                dataset=dataset_tag,
                 split="cv-best",
                 model="LogReg",
                 variant="grid",
                 best_f1=lr_search.best_score_,
                 params=lr_search.best_params_,
             )
-            # Print identifiers from best model
             best_lr = lr_search.best_estimator_
-            print_top_lr_identifiers(best_lr, "Kaggle", top_k=10)
-            print_top_lr_identifiers_filtered(best_lr, "Kaggle", top_k=10)
-            print_top_lr_identifiers_bigrams_only(best_lr, "Kaggle", top_k=10)
+            print_top_lr_identifiers(best_lr, dataset_tag, top_k=10)
+            print_top_lr_identifiers_filtered(best_lr, dataset_tag, top_k=10)
+            print_top_lr_identifiers_bigrams_only(best_lr, dataset_tag, top_k=10)
         except Exception as e:
-            print(f"[Kaggle][LogReg][CV] Error: {e}")
+            print(f"[{dataset_tag}][LogReg][CV] Error: {e}")
 
         # MultinomialNB CountVectorizer pipeline/grid
         try:
@@ -585,13 +419,13 @@ def run_kaggle_cv_grid():
                 "countvectorizer__min_df": [1, 2, 5],
                 "multinomialnb__alpha": [0.1, 0.5, 1.0, 2.0],
             }
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            cv = StratifiedKFold(n_splits=5, shuffle=shuffle, random_state=42 if shuffle else None)
             mnb_search = GridSearchCV(mnb_pipe, mnb_grid, cv=cv, scoring="f1", n_jobs=None)
             mnb_search.fit(X_texts, y)
-            print(f"[Kaggle][MNB][CV]   best_f1={mnb_search.best_score_:.3f}")
-            print(f"[Kaggle][MNB][CV]   best_params={mnb_search.best_params_}")
+            print(f"[{dataset_tag}][MNB][CV]   best_f1={mnb_search.best_score_:.3f}")
+            print(f"[{dataset_tag}][MNB][CV]   best_params={mnb_search.best_params_}")
             write_metrics_record(
-                dataset="Kaggle",
+                dataset=dataset_tag,
                 split="cv-best",
                 model="MNB",
                 variant="grid",
@@ -599,98 +433,30 @@ def run_kaggle_cv_grid():
                 params=mnb_search.best_params_,
             )
         except Exception as e:
-            print(f"[Kaggle][MNB][CV] Error: {e}")
+            print(f"[{dataset_tag}][MNB][CV] Error: {e}")
     except Exception as e:
-        print(f"[Kaggle][CV+Grid] Error: {e}")
+        print(f"[{dataset_tag}][CV+Grid] Error: {e}")
 
 
-def run_train2_cv_grid():
-    print("\n=== Train2 CV + Grid (LR/MNB) ===")
-    try:
-        X_texts, y = load_train2_texts_labels()
-        from sklearn.model_selection import StratifiedKFold, GridSearchCV
-        # Logistic Regression TF-IDF pipeline/grid (no shuffle K-fold to respect order preference)
-        try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.pipeline import make_pipeline as mkpipe
-            lr_pipe = mkpipe(
-                TfidfVectorizer(),
-                LogisticRegression(max_iter=1000)
-            )
-            lr_grid = {
-                "tfidfvectorizer__ngram_range": [(1, 1), (1, 2)],
-                "tfidfvectorizer__min_df": [1, 2, 5],
-                "tfidfvectorizer__max_df": [0.9, 0.95],
-                "logisticregression__C": [0.5, 1.0, 2.0],
-                "logisticregression__class_weight": [None, "balanced"],
-            }
-            cv = StratifiedKFold(n_splits=5, shuffle=False)
-            lr_search = GridSearchCV(lr_pipe, lr_grid, cv=cv, scoring="f1", n_jobs=None)
-            lr_search.fit(X_texts, y)
-            print(f"[Train2][LogReg][CV] best_f1={lr_search.best_score_:.3f}")
-            print(f"[Train2][LogReg][CV] best_params={lr_search.best_params_}")
-            write_metrics_record(
-                dataset="Train2",
-                split="cv-best",
-                model="LogReg",
-                variant="grid",
-                best_f1=lr_search.best_score_,
-                params=lr_search.best_params_,
-            )
-            best_lr = lr_search.best_estimator_
-            print_top_lr_identifiers(best_lr, "Train2", top_k=10)
-            print_top_lr_identifiers_filtered(best_lr, "Train2", top_k=10)
-            print_top_lr_identifiers_bigrams_only(best_lr, "Train2", top_k=10)
-        except Exception as e:
-            print(f"[Train2][LogReg][CV] Error: {e}")
-
-        # MultinomialNB CountVectorizer pipeline/grid
-        try:
-            from sklearn.feature_extraction.text import CountVectorizer
-            from sklearn.naive_bayes import MultinomialNB
-            from sklearn.pipeline import make_pipeline
-            mnb_pipe = make_pipeline(
-                CountVectorizer(),
-                MultinomialNB()
-            )
-            mnb_grid = {
-                "countvectorizer__ngram_range": [(1, 1), (1, 2)],
-                "countvectorizer__min_df": [1, 2, 5],
-                "multinomialnb__alpha": [0.1, 0.5, 1.0, 2.0],
-            }
-            cv = StratifiedKFold(n_splits=5, shuffle=False)
-            mnb_search = GridSearchCV(mnb_pipe, mnb_grid, cv=cv, scoring="f1", n_jobs=None)
-            mnb_search.fit(X_texts, y)
-            print(f"[Train2][MNB][CV]   best_f1={mnb_search.best_score_:.3f}")
-            print(f"[Train2][MNB][CV]   best_params={mnb_search.best_params_}")
-            write_metrics_record(
-                dataset="Train2",
-                split="cv-best",
-                model="MNB",
-                variant="grid",
-                best_f1=mnb_search.best_score_,
-                params=mnb_search.best_params_,
-            )
-        except Exception as e:
-            print(f"[Train2][MNB][CV] Error: {e}")
-    except Exception as e:
-        print(f"[Train2][CV+Grid] Error: {e}")
-
+# =====================================================================
+# Main
+# =====================================================================
 
 if __name__ == "__main__":
     # Kaggle dataset
-    c1, c0 = load_data()
-    print(f"[Kaggle] counts - clickbait (label=1): {c1}")
-    print(f"[Kaggle] counts - news      (label=0): {c0}")
-    run_kaggle_experiments()
-    # K-fold CV + GridSearch on Kaggle (LR/MNB)
-    run_kaggle_cv_grid()
+    k_c1, k_c0 = load_counts(KAGGLE_DATASET_PATH, "kaggle")
+    print(f"[Kaggle] counts - clickbait (label=1): {k_c1}")
+    print(f"[Kaggle] counts - news      (label=0): {k_c0}")
+    kaggle_texts, kaggle_y = load_texts_labels(KAGGLE_DATASET_PATH, "kaggle")
+    print("\n=== Kaggle Clickbait Dataset ===")
+    run_experiments(kaggle_texts, kaggle_y, dataset_tag="Kaggle", split="stratified")
+    run_cv_grid(kaggle_texts, kaggle_y, dataset_tag="Kaggle", shuffle=True)
 
-    # Train2 dataset (no shuffle)
-    t1, t0 = load_data_train2()
-    print(f"[Train2] counts - clickbait (label=1): {t1}")
-    print(f"[Train2] counts - news      (label=0): {t0}")
-    run_train2_experiments()
-    # K-fold CV + GridSearch on Train2 (LR/MNB)
-    run_train2_cv_grid()
+    # Train2 dataset (no shuffle split, contiguous)
+    t_c1, t_c0 = load_counts(TRAIN2_DATASET_PATH, "train2")
+    print(f"[Train2] counts - clickbait (label=1): {t_c1}")
+    print(f"[Train2] counts - news      (label=0): {t_c0}")
+    train2_texts, train2_y = load_texts_labels(TRAIN2_DATASET_PATH, "train2")
+    print("\n=== Train2 Dataset ===")
+    run_experiments(train2_texts, train2_y, dataset_tag="Train2", split="contiguous")
+    run_cv_grid(train2_texts, train2_y, dataset_tag="Train2", shuffle=False)
