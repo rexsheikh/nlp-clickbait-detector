@@ -1,6 +1,4 @@
-# Utilities
-    # - dataloaders for csv and jsonl format data
-
+# Data loaders for all three datasets
 import csv
 import json
 from pathlib import Path
@@ -19,8 +17,8 @@ WEBIS_TRUTH_PATH = str(DATA_DIR / "webis-data" / "truth.jsonl")
 # loads kaggle dataset, both in csv format. 
 # params: path (str or None)
 # return: texts (list[str]), labels (list[int])
-def load_kaggle_texts_labels(path=None):
-    path = path or KAGGLE_DATASET_PATH
+def load_kaggle_texts_labels():
+    path = KAGGLE_DATASET_PATH
     texts, labels = [], []
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f)
@@ -36,11 +34,11 @@ def load_kaggle_texts_labels(path=None):
     return texts, labels
 
 
-# Train2 loader (label{"news","clickbait"}, title); BOM-safe.
+# loads train2.csv
 # params: path (str or None)
 # return: texts (list[str]), labels (list[int: 1=clickbait, 0=news])
 def load_train2_texts_labels(path=None):
-    path = path or TRAIN2_DATASET_PATH
+    path = TRAIN2_DATASET_PATH
     texts, labels = [], []
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f)
@@ -58,19 +56,19 @@ def load_train2_texts_labels(path=None):
     return texts, labels
 
 
-# Internal: map Webis truthClass to int (clickbait->1, else 0).
-def _webis_label_from_truth_class(truth_class):
+# maps Webis truthClass to int (clickbait->1, else 0).
+def extract_label(truth_class):
     if truth_class is None:
         return 0
     return 1 if str(truth_class).strip().lower() == "clickbait" else 0
 
 
-# Webis loader (join truth.jsonl and instances.jsonl on id); BOM-safe ids/text.
+# Webis loader, joins truth.jsonl and instances.jsonl on id
 # params: instances_path (str or None), truth_path (str or None)
 # return: texts (list[str]), labels (list[int])
-def load_webis_texts_labels(instances_path=None, truth_path=None):
-    instances_path = instances_path or WEBIS_INSTANCES_PATH
-    truth_path = truth_path or WEBIS_TRUTH_PATH
+def load_webis_texts_labels():
+    instances_path = WEBIS_INSTANCES_PATH
+    truth_path = WEBIS_TRUTH_PATH
     truth_map = {}
     texts, labels = [], []
 
@@ -86,7 +84,7 @@ def load_webis_texts_labels(instances_path=None, truth_path=None):
                 continue
             tid = str(obj.get("id", "")).lstrip("\ufeff")
             truth_class = obj.get("truthClass", "")
-            truth_map[tid] = _webis_label_from_truth_class(truth_class)
+            truth_map[tid] = extract_label(truth_class)
 
     # Load instances and join
     with open(instances_path, encoding="utf-8", errors="replace") as f:
@@ -116,35 +114,31 @@ def load_webis_texts_labels(instances_path=None, truth_path=None):
     return texts, labels
 
 
-# Unified selector for convenience.
+# unified loader
 # params: dataset in {"kaggle","train2","webis"}
 # overrides: path=..., instances_path=..., truth_path=...
 # return: texts, labels
-def load_texts_labels(dataset, **overrides):
+def load_texts_labels(dataset):
     ds = str(dataset).lower().strip()
     if ds == "kaggle":
-        return load_kaggle_texts_labels(overrides.get("path"))
+        return load_kaggle_texts_labels()
     if ds == "train2":
-        return load_train2_texts_labels(overrides.get("path"))
+        return load_train2_texts_labels()
     if ds == "webis":
-        return load_webis_texts_labels(
-            instances_path=overrides.get("instances_path"),
-            truth_path=overrides.get("truth_path"),
-        )
+        return load_webis_texts_labels()
     raise ValueError(f"Unknown dataset: {dataset}")
 
 
-# Convenience: counts for a dataset via unified loader.
+# label counts for a dataset via unified loader.
 # return: dict {"clickbait": c1, "news": c0}
-def load_counts(dataset, **overrides):
-    _, labels = load_texts_labels(dataset, **overrides)
+def load_counts(dataset):
+    _, labels = load_texts_labels(dataset)
     c1 = sum(1 for v in labels if v == 1)
     c0 = sum(1 for v in labels if v == 0)
     return {"clickbait": c1, "news": c0}
 
-
+# run utilities to check for proper dataloads independently
 if __name__ == "__main__":
-    # Quick self-check (non-failing if files absent)
     try:
         for ds in ["kaggle", "train2", "webis"]:
             try:
