@@ -1,17 +1,12 @@
-#!/usr/bin/env python3
-# Centralized dataset loaders for Kaggle, Train2, and Webis.
-# - Defaults to relative paths under nlp-clickbait-detector/data
-# - Kaggle/Train2 use CSV DictReader (BOM-safe)
-# - Webis joins truth.jsonl and instances.jsonl (BOM-safe ids/texts)
-# - Exposes a unified load_texts_labels(dataset, **overrides) API
-# - Includes a load_counts helper
+# Utilities
+    # - dataloaders for csv and jsonl format data
 
 import csv
 import json
 from pathlib import Path
 
 
-# Paths (relative to project root for portability)
+# Data paths (see readme for details on project file structure)
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 
@@ -21,7 +16,7 @@ WEBIS_INSTANCES_PATH = str(DATA_DIR / "webis-data" / "instances.jsonl")
 WEBIS_TRUTH_PATH = str(DATA_DIR / "webis-data" / "truth.jsonl")
 
 
-# Kaggle loader (headline, clickbait[0/1]); BOM-safe headers/values.
+# loads kaggle dataset, both in csv format. 
 # params: path (str or None)
 # return: texts (list[str]), labels (list[int])
 def load_kaggle_texts_labels(path=None):
@@ -29,21 +24,13 @@ def load_kaggle_texts_labels(path=None):
     texts, labels = [], []
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f)
-        # strip BOM from header names if present
-        if reader.fieldnames:
-            reader.fieldnames = [
-                fn.lstrip("\ufeff") if isinstance(fn, str) else fn
-                for fn in reader.fieldnames
-            ]
         for row in reader:
             raw = row.get("clickbait")
             text = row.get("headline")
+            # skip empty rows and clean
             if raw is None or text is None:
                 continue
-            try:
-                y = int(str(raw).lstrip("\ufeff").strip())
-            except Exception:
-                continue
+            y = int(str(raw).strip().lower())
             texts.append(str(text).strip())
             labels.append(y)
     return texts, labels
@@ -57,18 +44,12 @@ def load_train2_texts_labels(path=None):
     texts, labels = [], []
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f)
-        # strip BOM from header names if present
-        if reader.fieldnames:
-            reader.fieldnames = [
-                fn.lstrip("\ufeff") if isinstance(fn, str) else fn
-                for fn in reader.fieldnames
-            ]
         for row in reader:
             raw = row.get("label")
             text = row.get("title")
             if raw is None or text is None:
                 continue
-            label = str(raw).lstrip("\ufeff").strip().lower()
+            label = str(raw).strip().lower()
             if label not in {"clickbait", "news"}:
                 continue
             y = 1 if label == "clickbait" else 0

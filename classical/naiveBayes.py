@@ -1,10 +1,4 @@
-#!/usr/bin/env python3
-# Naive Bayes runner using Problem4-style boolean features on clickbait datasets
-# - Runs on Kaggle, Train2, and Webis datasets
-# - Prints results with and without stopwords
-# - Uses nltk.FreqDist for vocabulary selection
-# - Keeps all imports at top
-
+# Naive Bayes
 import sys
 import argparse
 import random
@@ -12,11 +6,11 @@ import re
 from pathlib import Path
 
 import nltk
-nltk.download('stopwords')
+# nltk.download('stopwords')
 from nltk.classify import NaiveBayesClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
 
-# Make repo root importable so we can import dataset loaders
+# set repo root for dataloaders
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
