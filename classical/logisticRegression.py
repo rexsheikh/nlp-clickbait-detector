@@ -12,7 +12,7 @@ from pathlib import Path
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline as mkpipe
-from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, precision_recall_fscore_support, roc_auc_score, average_precision_score
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -94,13 +94,52 @@ def build_lr_pipeline(ngram_max=2, min_df=2, max_df=1.0, C=1.0, class_weight=Non
     return pipe
 
 
-def evaluate(gold, pred, tag):
+def evaluate(gold, pred, tag, y_score=None):
     acc = accuracy_score(gold, pred)
-    prec = precision_score(gold, pred, pos_label=1)
-    rec = recall_score(gold, pred, pos_label=1)
+    prec = precision_score(gold, pred, pos_label=1, zero_division=0)
+    rec = recall_score(gold, pred, pos_label=1, zero_division=0)
     cm = confusion_matrix(gold, pred, labels=[0, 1])
     print(f"[{tag}] Acc={acc:.3f}  Prec(pos=1)={prec:.3f}  Rec(pos=1)={rec:.3f}")
     print(f"[{tag}] Confusion Matrix:\n{cm}")
+
+    # Extended metrics (only if a continuous score is provided)
+    if y_score is not None:
+        try:
+            from sklearn.metrics import (
+                precision_recall_fscore_support,
+                roc_auc_score,
+                average_precision_score,
+            )
+            # Per-class metrics
+            p_c, r_c, f1_c, supp_c = precision_recall_fscore_support(
+                gold, pred, labels=[0, 1], zero_division=0
+            )
+            # Macro/micro
+            p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(
+                gold, pred, average="macro", zero_division=0
+            )
+            p_micro, r_micro, f1_micro, _ = precision_recall_fscore_support(
+                gold, pred, average="micro", zero_division=0
+            )
+            # AUCs (guard single-class)
+            try:
+                roc_auc = roc_auc_score(gold, y_score)
+            except Exception:
+                roc_auc = None
+            try:
+                pr_auc = average_precision_score(gold, y_score)
+            except Exception:
+                pr_auc = None
+
+            print(f"[{tag}] Per-class:")
+            print(f"  class 0: prec={p_c[0]:.3f} rec={r_c[0]:.3f} f1={f1_c[0]:.3f} support={supp_c[0]}")
+            print(f"  class 1: prec={p_c[1]:.3f} rec={r_c[1]:.3f} f1={f1_c[1]:.3f} support={supp_c[1]}")
+            print(f"[{tag}] Macro: prec={p_macro:.3f} rec={r_macro:.3f} f1={f1_macro:.3f}")
+            print(f"[{tag}] Micro: prec={p_micro:.3f} rec={r_micro:.3f} f1={f1_micro:.3f}")
+            print(f"[{tag}] ROC-AUC: {'N/A' if roc_auc is None else f'{roc_auc:.3f}'}")
+            print(f"[{tag}] PR-AUC:  {'N/A' if pr_auc is None else f'{pr_auc:.3f}'}")
+        except Exception as e:
+            print(f"[{tag}] Extended metrics error: {e}")
 
 
 # ------------------------
@@ -178,12 +217,28 @@ def print_top_lr_identifiers(pipeline, dataset_tag, top_k=10, mode="all"):
 # Orchestration
 # ------------------------
 
+# description: Train/evaluate TF-IDF + Logistic Regression on a deterministic 80/20 split with extended metrics.
+# params: dataset (str), X_texts (list[str]), y (list[int]), args (Namespace with vectorizer/LR params)
+# return: None (prints metrics to stdout)
 def train_and_evaluate_lr(dataset, X_texts, y, args):
-    """
-    Build TF-IDF + LogisticRegression pipeline, train on train split, evaluate on holdout.
-    Optionally print top identifiers.
-    """
-    X_train, X_test, y_train, y_test = choose_split(dataset, X_texts, y)
+    # Shuffle deterministically to avoid ordered-split pathologies
+    docs = list(zip(X_texts, y))
+    rnd = random.Random(42)
+    rnd.shuffle(docs)
+    X_texts, y = zip(*docs) if docs else ([], [])
+
+    n = len(X_texts)
+    if n == 0:
+        print(f"[{dataset}] No data loaded; skipping.")
+        return
+    k = max(1, int(0.8 * n))
+    X_train, X_test = X_texts[:k], X_texts[k:]
+    y_train, y_test = y[:k], y[k:]
+
+    # Log test distribution
+    pos_test = sum(1 for v in y_test if v == 1)
+    neg_test = len(y_test) - pos_test
+    print(f"[{dataset}] Test split distribution: pos={pos_test} neg={neg_test} (n={len(y_test)})")
 
     pipe = build_lr_pipeline(
         ngram_max=args.ngram_max,
@@ -195,8 +250,14 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     pipe.fit(X_train, y_train)
     preds = pipe.predict(X_test)
 
+    # Continuous scores for AUCs
+    try:
+        y_score = pipe.predict_proba(X_test)[:, 1]
+    except Exception:
+        y_score = None
+
     tag = f"{dataset}][LogReg][ng(1,{args.ngram_max})_minDF{args.min_df}_C{args.C}"
-    evaluate(y_test, preds, tag)
+    evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
         mode = args.show_identifiers_mode
