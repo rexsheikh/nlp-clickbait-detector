@@ -1,4 +1,5 @@
 data/
 *.pdf
 to-do.txt
-.DS-Store
+.DS_Store
+usage.md

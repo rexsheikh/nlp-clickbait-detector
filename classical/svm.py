@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
 # Linear SVM (SGD) runner for clickbait datasets
-# - Uses TF-IDF features + SGDClassifier(loss="hinge") i.e., linear SVM with stochastic gradient descent
-# - Runs on Kaggle, Train2, and Webis datasets
-# - Mirrors structure/CLI of logisticRegression.py for easy parity
-# - Keeps all imports at top
+# - TF-IDF (word) with optional char n-grams and structure/punctuation features
+# - Deterministic shuffle + 80/20 split
+# - Extended metrics (per-class, macro/micro, ROC-AUC, PR-AUC)
+# - DOE-friendly CLI flags and L8 presets
 
 import sys
 import argparse
 import random
+import re
 from pathlib import Path
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import SGDClassifier
-from sklearn.pipeline import make_pipeline as mkpipe
-from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
+from sklearn.pipeline import make_pipeline as mkpipe, FeatureUnion, Pipeline as SKPipeline
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    confusion_matrix,
+    precision_recall_fscore_support,
+    roc_auc_score,
+    average_precision_score,
+)
 
 # Make repo root importable so we can import dataset loaders
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -23,88 +33,126 @@ if str(REPO_ROOT) not in sys.path:
 # Unified data loader
 from utility.dataLoader import load_texts_labels as load_texts_labels_unified  # noqa: E402
 
+TOP_IDENTS = 10
+IGNORE_TERMS = {
+    "the","a","an","this","that","these","those",
+    "you","your","yours","what","which","who","whom",
+    "and","or","but",
+    "to","of","for","in","on","at","by","with","about","as","from",
+    "is","are","was","were","be","been","being",
+    "have","has","had","do","does","did",
+    "it","its","they","them","their","theirs",
+    "we","us","our","ours","i","me","my","mine",
+    "he","him","his","she","her","hers",
+    "yourself","yourselves","ourselves","himself","herself","themselves"
+}
+
 
 # ------------------------
-# Data loading and splits
+# Data loading helper
 # ------------------------
 
 def get_texts_labels_for(dataset):
     return load_texts_labels_unified(dataset)
 
 
-def stratified_holdout(X, y, test_size=0.2, random_state=42):
-    try:
-        from sklearn.model_selection import train_test_split as sk_split
-        return sk_split(X, y, test_size=test_size, stratify=y, random_state=random_state)
-    except Exception:
-        # Fallback: manual stratified split
-        rnd = random.Random(random_state)
-        by_class = {}
-        for i, label in enumerate(y):
-            by_class.setdefault(label, []).append(i)
-        train_idx, test_idx = [], []
-        for _, idxs in by_class.items():
-            rnd.shuffle(idxs)
-            n_test = max(1, int(len(idxs) * test_size)) if len(idxs) > 0 else 0
-            test_idx.extend(idxs[:n_test])
-            train_idx.extend(idxs[n_test:])
-        X_train = [X[i] for i in train_idx]
-        X_test = [X[i] for i in test_idx]
-        y_train = [y[i] for i in train_idx]
-        y_test = [y[i] for i in test_idx]
-        return X_train, X_test, y_train, y_test
+# ------------------------
+# SVM (SGD) feature builders
+# ------------------------
+
+# description: Featurizer to extract structure/punctuation features from raw text.
+# params: include_punct (bool), include_struct (bool)
+# return: sklearn-compatible transformer producing list[dict]
+class StructureFeaturizer:
+    def __init__(self, include_punct=False, include_struct=False):
+        self.include_punct = include_punct
+        self.include_struct = include_struct
+
+    def fit(self, X, y=None):
+        return self
+
+    def _has_emoji(self, s):
+        # basic emoji detection (broad)
+        return bool(re.search(r"[\U0001F300-\U0001FAFF]", s))
+
+    def transform(self, X):
+        out = []
+        for t in X:
+            s = t or ""
+            d = {}
+            if self.include_punct:
+                d["exclaim_count"] = s.count("!")
+                d["qmark_count"] = s.count("?")
+                d["has_emoji"] = 1 if self._has_emoji(s) else 0
+                d["exclaim_present"] = 1 if d["exclaim_count"] > 0 else 0
+                d["qmark_present"] = 1 if d["qmark_count"] > 0 else 0
+            if self.include_struct:
+                tokens = re.findall(r"[A-Za-z0-9']+", s)
+                d["token_count"] = len(tokens)
+                d["avg_token_len"] = (sum(len(w) for w in tokens) / len(tokens)) if tokens else 0.0
+                d["digit_present"] = 1 if any(ch.isdigit() for ch in s) else 0
+                d["superlative_present"] = 1 if re.search(r"\b(best|top|most|greatest)\b", s, flags=re.I) else 0
+            out.append(d)
+        return out
 
 
-def contiguous_holdout(X, y, frac=0.2):
-    n = len(X)
-    k = max(1, int(n * (1 - frac)))
-    return X[:k], X[k:], y[:k], y[k:]
+# description: Build a unioned feature extractor (word + optional char + optional structure) and SVM-SGD classifier.
+# params: args (Namespace with flags), eff_min_df (int), eff_max_df (float|None)
+# return: sklearn Pipeline
+def build_svm_pipeline_from_args(args, eff_min_df, eff_max_df):
+    branches = []
+    # word branch
+    word_vec = TfidfVectorizer(
+        ngram_range=(1, int(args.ngram_max)),
+        min_df=int(eff_min_df),
+        **({} if eff_max_df is None else {"max_df": float(eff_max_df)})
+    )
+    branches.append(("word", word_vec))
 
+    # char branch
+    if getattr(args, "char_ngrams", False):
+        char_vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=int(eff_min_df))
+        branches.append(("char", char_vec))
 
-def choose_split(dataset, X, y):
-    """
-    Match conventions:
-      - Kaggle/Webis: stratified shuffled 80/20 split
-      - Train2: deterministic contiguous 80/20 split
-    """
-    ds = dataset.lower()
-    if ds == "train2":
-        return contiguous_holdout(X, y, frac=0.2)
+    # structure branch
+    include_punct = getattr(args, "punct_signals", False)
+    include_struct = getattr(args, "struct_features", False)
+    if include_punct or include_struct:
+        struct_pipe = SKPipeline([
+            ("fe", StructureFeaturizer(include_punct=include_punct, include_struct=include_struct)),
+            ("dv", DictVectorizer())
+        ])
+        branches.append(("struct", struct_pipe))
+
+    # union or single
+    if len(branches) == 1:
+        features = branches[0][1]
     else:
-        return stratified_holdout(X, y, test_size=0.2, random_state=42)
+        features = FeatureUnion(branches)
 
-
-# ------------------------
-# SVM (SGD) pipeline and metrics
-# ------------------------
-
-def build_svm_pipeline(ngram_max=2, min_df=2, max_df=1.0, alpha=1e-4, penalty="l2", l1_ratio=0.15, class_weight=None):
-    # Vectorizer params
-    vec_kwargs = {
-        "ngram_range": (1, int(ngram_max)),
-        "min_df": int(min_df),
-    }
-    if max_df is not None and float(max_df) != 1.0:
-        vec_kwargs["max_df"] = float(max_df)
-
-    # Class weight
-    cw = None if (class_weight is None or str(class_weight).lower() == "none") else "balanced"
-
+    # classifier
+    cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
     clf = SGDClassifier(
-        loss="hinge",          # linear SVM objective
-        alpha=float(alpha),    # L2 regularization strength
-        penalty=str(penalty),
-        l1_ratio=float(l1_ratio),
+        loss="hinge",
+        alpha=float(args.alpha),
+        penalty=str(args.penalty),
+        l1_ratio=float(args.l1_ratio),
         max_iter=1000,
         tol=1e-3,
         class_weight=cw,
         random_state=42,
     )
 
-    pipe = mkpipe(TfidfVectorizer(**vec_kwargs), clf)
-    return pipe
+    return SKPipeline([("features", features), ("clf", clf)])
 
 
+# ------------------------
+# Metrics
+# ------------------------
+
+# description: Print core and extended metrics; extended metrics only when y_score is provided.
+# params: gold (list[int]), pred (list[int]), tag (str), y_score (array-like|None)
+# return: None (prints to stdout)
 def evaluate(gold, pred, tag, y_score=None):
     acc = accuracy_score(gold, pred)
     prec = precision_score(gold, pred, pos_label=1, zero_division=0)
@@ -113,26 +161,17 @@ def evaluate(gold, pred, tag, y_score=None):
     print(f"[{tag}] Acc={acc:.3f}  Prec(pos=1)={prec:.3f}  Rec(pos=1)={rec:.3f}")
     print(f"[{tag}] Confusion Matrix:\n{cm}")
 
-    # Extended metrics (only if a continuous score is provided)
     if y_score is not None:
         try:
-            from sklearn.metrics import (
-                precision_recall_fscore_support,
-                roc_auc_score,
-                average_precision_score,
-            )
-            # Per-class metrics
             p_c, r_c, f1_c, supp_c = precision_recall_fscore_support(
                 gold, pred, labels=[0, 1], zero_division=0
             )
-            # Macro/micro
             p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(
                 gold, pred, average="macro", zero_division=0
             )
             p_micro, r_micro, f1_micro, _ = precision_recall_fscore_support(
                 gold, pred, average="micro", zero_division=0
             )
-            # AUCs (guard single-class)
             try:
                 roc_auc = roc_auc_score(gold, y_score)
             except Exception:
@@ -154,88 +193,62 @@ def evaluate(gold, pred, tag, y_score=None):
 
 
 # ------------------------
-# Feature introspection (works for linear models with coef_)
+# Feature introspection
 # ------------------------
 
-def get_vec_clf_linear(pipeline):
-    """
-    Extract TfidfVectorizer and linear classifier (SGDClassifier/LogisticRegression) from a sklearn Pipeline.
-    """
-    vec = getattr(pipeline, "named_steps", {}).get("tfidfvectorizer")
-    clf = None
-    # Try common names
-    clf = getattr(pipeline, "named_steps", {}).get("sgdclassifier", None) or getattr(pipeline, "named_steps", {}).get("logisticregression", None)
-    if vec is None or clf is None:
-        for _, step in getattr(pipeline, "named_steps", {}).items():
-            n = step.__class__.__name__.lower()
-            if n == "tfidfvectorizer":
-                vec = step
-            if n in {"sgdclassifier", "logisticregression"}:
-                clf = step
-    return vec, clf
-
-
-def print_top_linear_identifiers(pipeline, dataset_tag, top_k=10, mode="all"):
-    """
-    Print top positive/negative weighted features from a linear model with coef_.
-    mode in {"all", "filtered", "bigrams"}
-    """
+# description: Print top positive/negative weighted word features for a linear model when a single TfidfVectorizer is used.
+# params: pipeline (sklearn Pipeline), dataset_tag (str), top_k (int=TOP_IDENTS)
+# return: None (prints to stdout)
+def show_top_identifiers(pipeline, dataset_tag, top_k=TOP_IDENTS):
     try:
-        vec, clf = get_vec_clf_linear(pipeline)
-        if vec is None or clf is None or not hasattr(clf, "coef_"):
-            print(f"[{dataset_tag}][SVM-SGD][{mode}] Unable to extract feature names or coefficients.")
+        vec = getattr(pipeline, "named_steps", {}).get("features")
+        clf = getattr(pipeline, "named_steps", {}).get("clf")
+
+        # Only support a single TfidfVectorizer (word) branch for clear mapping
+        from sklearn.feature_extraction.text import TfidfVectorizer as _TV
+        from sklearn.pipeline import FeatureUnion as _FU
+        if isinstance(vec, _FU):
+            print(f"[{dataset_tag}][SVM-SGD] Identifier printing not supported with multiple feature branches (FeatureUnion).")
+            return
+        if not isinstance(vec, _TV) or not hasattr(clf, "coef_"):
+            print(f"[{dataset_tag}][SVM-SGD] Unable to extract word feature names or coefficients.")
             return
 
         feature_names = vec.get_feature_names_out()
         coefs = clf.coef_[0]
 
-        if mode == "bigrams":
-            kept_indices = [i for i, name in enumerate(feature_names) if " " in name]
-        elif mode == "filtered":
-            IGNORE_TERMS = {
-                "the","a","an","this","that","these","those",
-                "you","your","yours","what","which","who","whom",
-                "and","or","but",
-                "to","of","for","in","on","at","by","with","about","as","from",
-                "is","are","was","were","be","been","being",
-                "have","has","had","do","does","did",
-                "it","its","they","them","their","theirs",
-                "we","us","our","ours","i","me","my","mine",
-                "he","him","his","she","her","hers",
-                "yourself","yourselves","ourselves","himself","herself","themselves"
-            }
-            kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
-        else:
-            kept_indices = list(range(len(feature_names)))
-
+        kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
         if not kept_indices:
-            print(f"[{dataset_tag}][SVM-SGD][{mode}] No terms left after filtering.")
+            print(f"[{dataset_tag}][SVM-SGD] No terms left after filtering.")
             return
 
         pos_sorted = sorted(kept_indices, key=lambda i: coefs[i], reverse=True)
         neg_sorted = sorted(kept_indices, key=lambda i: coefs[i])
 
-        print(f"[{dataset_tag}][SVM-SGD][{mode}] Top {top_k} clickbait indicators:")
+        print(f"[{dataset_tag}][SVM-SGD] Top {top_k} clickbait indicators:")
         for i in pos_sorted[:top_k]:
             print(f"  {feature_names[i]}: {coefs[i]:.4f}")
 
-        print(f"[{dataset_tag}][SVM-SGD][{mode}] Top {top_k} news indicators:")
+        print(f"[{dataset_tag}][SVM-SGD] Top {top_k} news indicators:")
         for i in neg_sorted[:top_k]:
             print(f"  {feature_names[i]}: {coefs[i]:.4f}")
     except Exception as e:
-        print(f"[{dataset_tag}][SVM-SGD][{mode}] Error printing top identifiers: {e}")
-
+        print(f"[{dataset_tag}][SVM-SGD] Error printing top identifiers: {e}")
 
 # ------------------------
 # Orchestration
 # ------------------------
 
+# description: Train/evaluate TF-IDF (+ optional char/struct) + Linear SVM (SGD) on a deterministic 80/20 split.
+# params: dataset (str), X_texts (list[str]), y (list[int]), args (Namespace)
+# return: None (prints metrics to stdout)
 def train_and_evaluate_svm(dataset, X_texts, y, args):
-    """
-    Build TF-IDF + SGDClassifier(hinge) pipeline, train on train split, evaluate on holdout.
-    Fixed 80/20 contiguous split by slicing.
-    Optionally print top identifiers.
-    """
+    # Shuffle deterministically to avoid ordered-split pathologies
+    docs = list(zip(X_texts, y))
+    rnd = random.Random(42)
+    rnd.shuffle(docs)
+    X_texts, y = zip(*docs) if docs else ([], [])
+
     n = len(X_texts)
     if n == 0:
         print(f"[{dataset}] No data loaded; skipping.")
@@ -249,15 +262,11 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     neg_test = len(y_test) - pos_test
     print(f"[{dataset}] Test split distribution: pos={pos_test} neg={neg_test} (n={len(y_test)})")
 
-    pipe = build_svm_pipeline(
-        ngram_max=args.ngram_max,
-        min_df=args.min_df,
-        max_df=args.max_df,
-        alpha=args.alpha,
-        penalty=args.penalty,
-        l1_ratio=args.l1_ratio,
-        class_weight=args.class_weight,
-    )
+    # Effective pruning settings
+    eff_min_df = 5 if getattr(args, "min_df_high", False) else args.min_df
+    eff_max_df = 0.95 if getattr(args, "min_df_high", False) else (None if args.max_df == 1.0 else args.max_df)
+
+    pipe = build_svm_pipeline_from_args(args, eff_min_df=int(eff_min_df), eff_max_df=eff_max_df)
     pipe.fit(X_train, y_train)
     preds = pipe.predict(X_test)
 
@@ -271,9 +280,8 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
-        mode = args.show_identifiers_mode
-        top_k = args.top_k
-        print_top_linear_identifiers(pipe, dataset.capitalize(), top_k=top_k, mode=mode)
+        top_k = args.top_k if hasattr(args, "top_k") else TOP_IDENTS
+        show_top_identifiers(pipe, dataset.capitalize(), top_k=top_k)
 
 
 def run_for_dataset(dataset, args):
@@ -288,8 +296,9 @@ def run_for_dataset(dataset, args):
 def main():
     parser = argparse.ArgumentParser(description="TF-IDF + Linear SVM (SGD) for clickbait datasets")
     parser.add_argument("--dataset", choices=["all", "kaggle", "train2", "webis"], default="all", help="Dataset to run")
-    parser.add_argument("--ngram-max", type=int, default=2, help="Max n for TF-IDF n-gram range (1..n)")
-    parser.add_argument("--min-df", type=int, default=2, help="Minimum document frequency for TF-IDF")
+    parser.add_argument("--design", choices=["baseline","L8-1","L8-2","L8-3","L8-4","L8-5","L8-6","L8-7","L8-8"], default=None, help="Preset factor design")
+    parser.add_argument("--ngram-max", type=int, default=2, help="Max n for word TF-IDF n-gram range (1..n)")
+    parser.add_argument("--min-df", type=int, default=2, help="Minimum document frequency for word TF-IDF")
     parser.add_argument("--max-df", type=float, default=1.0, help="Max document frequency for TF-IDF (<=1.0 means proportion)")
 
     # SGD (SVM) hyperparameters
@@ -298,12 +307,35 @@ def main():
     parser.add_argument("--l1-ratio", type=float, default=0.15, help="L1 ratio (only used with elasticnet)")
     parser.add_argument("--class-weight", choices=["none", "balanced"], default="none", help="Class weight setting")
 
+    # Factor toggles
+    parser.add_argument("--punct-signals", action="store_true", help="Add punctuation signals (exclaim/qmark/emoji)")
+    parser.add_argument("--char-ngrams", action="store_true", help="Add character n-grams (char_wb 3-5)")
+    parser.add_argument("--struct-features", action="store_true", help="Add length/structure features")
+    parser.add_argument("--min-df-high", action="store_true", help="Use higher pruning (min_df=5, max_df=0.95)")
+
     # Diagnostics
-    parser.add_argument("--show-identifiers", action="store_true", help="Print top positive/negative weighted features")
+    parser.add_argument("--show-identifiers", action="store_true", help="Print top positive/negative weighted features (limited support under unions)")
     parser.add_argument("--show-identifiers-mode", choices=["all", "filtered", "bigrams"], default="all", help="Identifier filtering mode")
     parser.add_argument("--top-k", type=int, default=10, help="Top K terms to display in identifier printouts")
 
     args = parser.parse_args()
+
+    # Apply design presets
+    if args.design:
+        presets = {
+            "baseline": dict(punct_signals=False, char_ngrams=False, struct_features=False, min_df_high=False, class_weight="none"),
+            "L8-1": dict(punct_signals=False, char_ngrams=False, struct_features=False, min_df_high=False, class_weight="none"),
+            "L8-2": dict(punct_signals=False, char_ngrams=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
+            "L8-3": dict(punct_signals=True,  char_ngrams=False, struct_features=True,  min_df_high=True,  class_weight="none"),
+            "L8-4": dict(punct_signals=True,  char_ngrams=True,  struct_features=False, min_df_high=False, class_weight="none"),
+            "L8-5": dict(punct_signals=False, char_ngrams=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "L8-6": dict(punct_signals=False, char_ngrams=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
+            "L8-7": dict(punct_signals=True,  char_ngrams=False, struct_features=False, min_df_high=False, class_weight="balanced"),
+            "L8-8": dict(punct_signals=True,  char_ngrams=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
+        }
+        cfg = presets.get(args.design, {})
+        for k, v in cfg.items():
+            setattr(args, k, v)
 
     if args.dataset == "all":
         for ds in ["kaggle", "train2", "webis"]:
