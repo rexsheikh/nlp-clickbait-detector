@@ -1,7 +1,6 @@
 import sys
 import argparse
 import random
-import re
 from pathlib import Path
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -18,40 +17,15 @@ from sklearn.metrics import (
     average_precision_score,
 )
 
-# Make repo root importable so we can import dataset loaders
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Unified data loader
 from utility.dataLoader import load_texts_labels as load_texts_labels_unified  # noqa: E402
+from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS
 
-TOP_IDENTS = 10
-IGNORE_TERMS = {
-    "the","a","an","this","that","these","those",
-    "you","your","yours","what","which","who","whom",
-    "and","or","but",
-    "to","of","for","in","on","at","by","with","about","as","from",
-    "is","are","was","were","be","been","being",
-    "have","has","had","do","does","did",
-    "it","its","they","them","their","theirs",
-    "we","us","our","ours","i","me","my","mine",
-    "he","him","his","she","her","hers",
-    "yourself","yourselves","ourselves","himself","herself","themselves"
-}
 
-# description: set of superlative-like terms (case-insensitive) for structure features
-SUPERLATIVE_TERMS = {
-    "best","top","most","greatest","ultimate","amazing","incredible","unbelievable","shocking",
-    "craziest","wildest","epic","insane","must-see"
-}
 
-# description: check if any superlative term appears (case-insensitive), no regex
-# params: text (str), super_terms (set[str])
-# return: bool
-def contains_superlative(text, super_terms=SUPERLATIVE_TERMS):
-    tokens = re.findall(r"[A-Za-z0-9']+", text or "")
-    return any(t.lower() in super_terms for t in tokens)
 
 
 # ------------------------
@@ -77,27 +51,12 @@ class StructureFeaturizer:
     def fit(self, X, y=None):
         return self
 
-    def _has_emoji(self, s):
-        # basic emoji detection (broad)
-        return bool(re.search(r"[\U0001F300-\U0001FAFF]", s))
 
     def transform(self, X):
         out = []
         for t in X:
             s = t or ""
-            d = {}
-            if self.include_punct:
-                d["exclaim_count"] = s.count("!")
-                d["qmark_count"] = s.count("?")
-                d["has_emoji"] = 1 if self._has_emoji(s) else 0
-                d["exclaim_present"] = 1 if d["exclaim_count"] > 0 else 0
-                d["qmark_present"] = 1 if d["qmark_count"] > 0 else 0
-            if self.include_struct:
-                tokens = re.findall(r"[A-Za-z0-9']+", s)
-                d["token_count"] = len(tokens)
-                d["avg_token_len"] = (sum(len(w) for w in tokens) / len(tokens)) if tokens else 0.0
-                d["digit_present"] = 1 if any(ch.isdigit() for ch in s) else 0
-                d["superlative_present"] = 1 if contains_superlative(s) else 0
+            d = compute_extra_features(s, include_punct=self.include_punct, include_struct=self.include_struct)
             out.append(d)
         return out
 
@@ -108,17 +67,15 @@ class StructureFeaturizer:
 def build_svm_pipeline_from_args(args, eff_min_df, eff_max_df):
     branches = []
     # word branch
+    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
     word_vec = TfidfVectorizer(
-        ngram_range=(1, int(args.ngram_max)),
+        ngram_range=(1, 1),
         min_df=int(eff_min_df),
+        stop_words=stop_words,
         **({} if eff_max_df is None else {"max_df": float(eff_max_df)})
     )
     branches.append(("word", word_vec))
 
-    # char branch
-    if getattr(args, "char_ngrams", False):
-        char_vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=int(eff_min_df))
-        branches.append(("char", char_vec))
 
     # structure branch
     include_punct = getattr(args, "punct_signals", False)
@@ -205,7 +162,7 @@ def evaluate(gold, pred, tag, y_score=None):
 # description: Print top positive/negative weighted word features for a linear model when a single TfidfVectorizer is used.
 # params: pipeline (sklearn Pipeline), dataset_tag (str), top_k (int=TOP_IDENTS)
 # return: None (prints to stdout)
-def show_top_identifiers(pipeline, dataset_tag, top_k=TOP_IDENTS):
+def show_top_identifiers(pipeline, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False):
     try:
         vec = getattr(pipeline, "named_steps", {}).get("features")
         clf = getattr(pipeline, "named_steps", {}).get("clf")
@@ -223,7 +180,10 @@ def show_top_identifiers(pipeline, dataset_tag, top_k=TOP_IDENTS):
         feature_names = vec.get_feature_names_out()
         coefs = clf.coef_[0]
 
-        kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
+        if ignore_terms:
+            kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
+        else:
+            kept_indices = list(range(len(feature_names)))
         if not kept_indices:
             print(f"[{dataset_tag}][SVM-SGD] No terms left after filtering.")
             return
@@ -282,12 +242,12 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     except Exception:
         y_score = None
 
-    tag = f"{dataset}][SVM-SGD][ng(1,{args.ngram_max})_minDF{args.min_df}_alpha{args.alpha}_{args.penalty}"
+    tag = f"{dataset}][SVM-SGD][minDF{args.min_df}_alpha{args.alpha}_{args.penalty}"
     evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
         top_k = args.top_k if hasattr(args, "top_k") else TOP_IDENTS
-        show_top_identifiers(pipe, dataset.capitalize(), top_k=top_k)
+        show_top_identifiers(pipe, dataset.capitalize(), top_k=top_k, ignore_terms=getattr(args, "ignore_terms", False))
 
 
 def run_for_dataset(dataset, args):
@@ -303,7 +263,6 @@ def main():
     parser = argparse.ArgumentParser(description="TF-IDF + Linear SVM (SGD) for clickbait datasets")
     parser.add_argument("--dataset", choices=["all", "kaggle", "train2", "webis"], default="all", help="Dataset to run")
     parser.add_argument("--design", choices=["baseline","L8-1","L8-2","L8-3","L8-4","L8-5","L8-6","L8-7","L8-8"], default=None, help="Preset factor design")
-    parser.add_argument("--ngram-max", type=int, default=2, help="Max n for word TF-IDF n-gram range (1..n)")
     parser.add_argument("--min-df", type=int, default=2, help="Minimum document frequency for word TF-IDF")
     parser.add_argument("--max-df", type=float, default=1.0, help="Max document frequency for TF-IDF (<=1.0 means proportion)")
 
@@ -315,13 +274,12 @@ def main():
 
     # Factor toggles
     parser.add_argument("--punct-signals", action="store_true", help="Add punctuation signals (exclaim/qmark/emoji)")
-    parser.add_argument("--char-ngrams", action="store_true", help="Add character n-grams (char_wb 3-5)")
     parser.add_argument("--struct-features", action="store_true", help="Add length/structure features")
+    parser.add_argument("--ignore-terms", action="store_true", default=False, help="Ignore common terms (IGNORE_TERMS) during featurization/identifiers")
     parser.add_argument("--min-df-high", action="store_true", help="Use higher pruning (min_df=5, max_df=0.95)")
 
     # Diagnostics
     parser.add_argument("--show-identifiers", action="store_true", help="Print top positive/negative weighted features (limited support under unions)")
-    parser.add_argument("--show-identifiers-mode", choices=["all", "filtered", "bigrams"], default="all", help="Identifier filtering mode")
     parser.add_argument("--top-k", type=int, default=10, help="Top K terms to display in identifier printouts")
 
     args = parser.parse_args()
@@ -329,15 +287,15 @@ def main():
     # Apply design presets
     if args.design:
         presets = {
-            "baseline": dict(punct_signals=False, char_ngrams=False, struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-1": dict(punct_signals=False, char_ngrams=False, struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-2": dict(punct_signals=False, char_ngrams=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
-            "L8-3": dict(punct_signals=True,  char_ngrams=False, struct_features=True,  min_df_high=True,  class_weight="none"),
-            "L8-4": dict(punct_signals=True,  char_ngrams=True,  struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-5": dict(punct_signals=False, char_ngrams=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
-            "L8-6": dict(punct_signals=False, char_ngrams=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
-            "L8-7": dict(punct_signals=True,  char_ngrams=False, struct_features=False, min_df_high=False, class_weight="balanced"),
-            "L8-8": dict(punct_signals=True,  char_ngrams=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "baseline": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
+            "L8-1": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
+            "L8-2": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="none"),
+            "L8-3": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
+            "L8-4": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="none"),
+            "L8-5": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "L8-6": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="balanced"),
+            "L8-7": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
+            "L8-8": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
         }
         cfg = presets.get(args.design, {})
         for k, v in cfg.items():
