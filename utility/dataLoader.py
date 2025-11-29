@@ -72,7 +72,7 @@ def load_webis_texts_labels():
     truth_map = {}
     texts, labels = [], []
 
-    # Load truth (id -> label)
+    # Load truth, mapping truthClass to id
     with open(truth_path, encoding="utf-8", errors="replace") as f:
         for raw in f:
             line = (raw or "").strip()
@@ -82,8 +82,8 @@ def load_webis_texts_labels():
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            tid = str(obj.get("id", "")).lstrip("\ufeff")
-            truth_class = obj.get("truthClass", "")
+            tid = str(obj.get("id", "")).lstrip("\ufeff") # remove byte order mark if necessary
+            truth_class = obj.get("truthClass", "") # truthClass is either clickbait or no-clickbait
             truth_map[tid] = extract_label(truth_class)
 
     # Load instances and join
@@ -97,12 +97,11 @@ def load_webis_texts_labels():
             except json.JSONDecodeError:
                 continue
             iid = str(obj.get("id", "")).lstrip("\ufeff")
-            if iid not in truth_map:
+            if iid not in truth_map: 
                 continue
-            post_text_list = obj.get("postText") or []
+            post_text_list = obj.get("postText") # postText is the key with post value which we are treating as a headline
             text = ""
             if isinstance(post_text_list, list) and len(post_text_list) > 0:
-                # prefer first, fallback to join
                 text = str(post_text_list[0]).lstrip("\ufeff").strip()
                 if not text and len(post_text_list) > 1:
                     text = " ".join(map(str, post_text_list)).strip()
@@ -116,7 +115,6 @@ def load_webis_texts_labels():
 
 # unified loader
 # params: dataset in {"kaggle","train2","webis"}
-# overrides: path=..., instances_path=..., truth_path=...
 # return: texts, labels
 def load_texts_labels(dataset):
     ds = str(dataset).lower().strip()
@@ -126,15 +124,14 @@ def load_texts_labels(dataset):
         return load_train2_texts_labels()
     if ds == "webis":
         return load_webis_texts_labels()
-    raise ValueError(f"Unknown dataset: {dataset}")
 
 
 # label counts for a dataset via unified loader.
 # return: dict {"clickbait": c1, "news": c0}
 def load_counts(dataset):
     _, labels = load_texts_labels(dataset)
-    c1 = sum(1 for v in labels if v == 1)
-    c0 = sum(1 for v in labels if v == 0)
+    c1 = sum(1 for val in labels if val == 1)
+    c0 = sum(1 for val in labels if val == 0)
     return {"clickbait": c1, "news": c0}
 
 # run utilities to check for proper dataloads independently

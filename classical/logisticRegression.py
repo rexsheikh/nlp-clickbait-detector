@@ -1,9 +1,3 @@
-# Logistic Regression runner (TF-IDF + LR) for clickbait datasets
-# - Runs on Kaggle, Train2, and Webis datasets
-# - Adapts patterns from classical_nlp_kaggle/webis and hw4/LR_Homework4.py
-# - Provides CLI for vectorizer/LR hyperparameters and optional feature introspection
-# - Keeps all imports at top
-
 import sys
 import argparse
 import random
@@ -36,6 +30,19 @@ IGNORE_TERMS = {
     "he","him","his","she","her","hers",
     "yourself","yourselves","ourselves","himself","herself","themselves"
 }
+
+# description: set of superlative-like terms (case-insensitive) for structure features
+SUPERLATIVE_TERMS = {
+    "best","top","most","greatest","ultimate","amazing","incredible","unbelievable","shocking",
+    "craziest","wildest","epic","insane","must-see"
+}
+
+# description: check if any superlative term appears (case-insensitive), no regex
+# params: text (str), super_terms (set[str])
+# return: bool
+def contains_superlative(text, super_terms=SUPERLATIVE_TERMS):
+    tokens = re.findall(r"[A-Za-z0-9']+", text or "")
+    return any(t.lower() in super_terms for t in tokens)
 
 
 # ------------------------
@@ -143,8 +150,8 @@ class StructureFeaturizer:
                 d["token_count"] = len(tokens)
                 d["avg_token_len"] = (sum(len(w) for w in tokens) / len(tokens)) if tokens else 0.0
                 d["digit_present"] = 1 if any(ch.isdigit() for ch in s) else 0
-                # simple superlative cue
-                d["superlative_present"] = 1 if re.search(r"\b(best|top|most|greatest)\b", s, flags=re.I) else 0
+                # simple superlative cue (no regex; token membership)
+                d["superlative_present"] = 1 if contains_superlative(s) else 0
             out.append(d)
         return out
 
