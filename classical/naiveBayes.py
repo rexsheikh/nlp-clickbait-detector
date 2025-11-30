@@ -11,7 +11,6 @@ import nltk
 from nltk.classify import NaiveBayesClassifier
 from nltk.corpus import stopwords
 from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, precision_recall_fscore_support, roc_auc_score, average_precision_score
-from utility.common_text import compute_extra_features
 
 # set repo root for dataloaders
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 # import dataset loaders and paths
 from utility.dataLoader import load_texts_labels as load_texts_labels_unified
-from utility.common_text import TOP_N_DEFAULT, TOP_IDENTS, IGNORE_TERMS, SUPERLATIVE_TERMS
+from utility.common_text import TOP_N_DEFAULT, TOP_IDENTS, IGNORE_TERMS, SUPERLATIVE_TERMS, compute_extra_features
 
 # == tokenization and vocab building ==
 # description: gives word tokens from a given input text
@@ -81,10 +80,6 @@ def build_document_features(text, word_features, stopwords_set=None, ignore_term
     if include_punct or include_struct:
         features.update(compute_extra_features(text, include_punct=include_punct, include_struct=include_struct))
     return features
-
-## FIX - REFACTOR
-def get_texts_labels_for(dataset):
-    return load_texts_labels_unified(dataset)
 
 # == training and evaluation ==
 def evaluate(gold, pred, tag, y_score=None):
@@ -223,7 +218,7 @@ def train_and_evaluate_naive_bayes(
 # description: execute naive bayes as baseline. CLI args allow for configurable tuning
 def run_for_dataset(dataset, args):
     print(f"\n=== {dataset.capitalize()} (Naive Bayes) ===")
-    X_texts, y = get_texts_labels_for(dataset)
+    X_texts, y = load_texts_labels_unified(dataset)
     if not X_texts or not y:
         print(f"[{dataset}] No data loaded; skipping.")
         return
