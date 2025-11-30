@@ -49,25 +49,7 @@ def get_stopwords(enabled):
     except Exception:
         return set()
 
-# # description: compute extra boolean features for punctuation/structure
-# # params: text (str), include_punct (bool), include_struct (bool)
-# # return: dict[str, bool|int|float]
-# def compute_extra_features(text, include_punct=False, include_struct=False):
-#     s = text or ""
-#     feats = {}
-#     if include_punct:
-#         ex_cnt = s.count("!")
-#         qm_cnt = s.count("?")
-#         feats["exclaim_present"] = ex_cnt > 0
-#         feats["qmark_present"] = qm_cnt > 0
-#     if include_struct:
-#         tokens = re.findall(r"[A-Za-z0-9']+", s)
-#         feats["digit_present"] = any(ch.isdigit() for ch in s)
-#         feats["superlative_present"] = contains_superlative(s)
-#         feats["short_length"] = (len(tokens) <= 6)
-#     return feats
-
-# builds top-N vocab over tokens (+ optional n-grams)
+# builds top-N vocab over tokens
 def build_word_features(texts, top_n=TOP_N_DEFAULT, stopwords_set=None, ignore_terms=False):
     stopwords_set = stopwords_set or set()
     all_tokens = []
@@ -100,6 +82,7 @@ def build_document_features(text, word_features, stopwords_set=None, ignore_term
         features.update(compute_extra_features(text, include_punct=include_punct, include_struct=include_struct))
     return features
 
+## FIX - REFACTOR
 def get_texts_labels_for(dataset):
     return load_texts_labels_unified(dataset)
 
@@ -126,7 +109,7 @@ def evaluate(gold, pred, tag, y_score=None):
             p_micro, r_micro, f1_micro, _ = precision_recall_fscore_support(
                 gold, pred, average="micro", zero_division=0
             )
-            # AUCs (guard single-class)
+            # FIX/Refactor - why the try/except here?
             try:
                 roc_auc = roc_auc_score(gold, y_score)
             except Exception:
@@ -258,10 +241,10 @@ def run_for_dataset(dataset, args):
     )
 
 def main():
-    parser = argparse.ArgumentParser(description="Problem4-style Naive Bayes for clickbait datasets")
+    parser = argparse.ArgumentParser(description="Naive Bayes Analysis")
     parser.add_argument("--dataset", choices=["all", "kaggle", "train2", "webis"], default="all", help="Dataset to run")
     parser.add_argument("--top-n", type=int, default=TOP_N_DEFAULT, help="Top-N features for vocabulary (FreqDist)")
-    # Factor toggles (subset applicable to NB)
+    # Feature toggles (subset applicable to NB)
     parser.add_argument("--punct-signals", action="store_true", help="Add punctuation signals (exclaim/qmark) as boolean features")
     parser.add_argument("--struct-features", action="store_true", help="Add structure features (digit/superlative/short_length) as boolean features")
     parser.add_argument("--use-stopwords", action="store_true", help="Use NLTK stopword removal during vocab/featurization")

@@ -5,7 +5,6 @@ from pathlib import Path
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import make_pipeline as mkpipe, FeatureUnion, Pipeline as SKPipeline
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, precision_recall_fscore_support, roc_auc_score, average_precision_score
 
@@ -18,93 +17,9 @@ from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS
 
 
 
-
-# data loading and splits
-def get_texts_labels_for(dataset):
-    return load_texts_labels_unified(dataset)
-
-
-
-
-
-# ------------------------
-# LR pipeline and metrics
-# ------------------------
-
-# description: Build a simple TF-IDF + LogisticRegression pipeline (word n-grams only).
-# params: ngram_max (int), min_df (int), max_df (float|None), C (float), class_weight (str|None)
-# return: sklearn Pipeline
-def build_lr_pipeline(min_df=2, max_df=1.0, C=1.0, class_weight=None):
-    # Vectorizer params (unigrams only)
-    vec_kwargs = {
-        "ngram_range": (1, 1),
-        "min_df": int(min_df),
-    }
-    # Apply max_df only if < 1.0 or > 1 (to avoid no-op noise)
-    if max_df is not None and float(max_df) != 1.0:
-        vec_kwargs["max_df"] = float(max_df)
-
-    # LR params
-    cw = None if (class_weight is None or str(class_weight).lower() == "none") else "balanced"
-    clf = LogisticRegression(max_iter=1000, C=float(C), class_weight=cw)
-
-    pipe = mkpipe(TfidfVectorizer(**vec_kwargs), clf)
-    return pipe
-
-# description: Featurizer to extract structure/punctuation features from raw text.
+# description: featurizer to extract structure/punctuation features from raw text.
 # params: include_punct (bool), include_struct (bool)
-# return: sklearn-compatible transformer producing list[dict]
-class StructureFeaturizer:
-    def __init__(self, include_punct=False, include_struct=False):
-        self.include_punct = include_punct
-        self.include_struct = include_struct
-
-    def fit(self, X, y=None):
-        return self
-
-
-    def transform(self, X):
-        out = []
-        for t in X:
-            s = t or ""
-            d = compute_extra_features(s, include_punct=self.include_punct, include_struct=self.include_struct)
-            out.append(d)
-        return out
-
-# description: Build a unioned feature extractor (word + optional char + optional structure) and LR classifier.
-# params: args (Namespace with flags), eff_min_df (int), eff_max_df (float|None)
-# return: sklearn Pipeline
-def build_lr_pipeline_from_args(args, eff_min_df, eff_max_df):
-    branches = []
-    # word branch
-    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
-    word_vec = TfidfVectorizer(ngram_range=(1, 1), min_df=eff_min_df, stop_words=stop_words, **({} if eff_max_df is None else {"max_df": eff_max_df}))
-    branches.append(("word", word_vec))
-
-
-    # structure branch
-    include_punct = getattr(args, "punct_signals", False)
-    include_struct = getattr(args, "struct_features", False)
-    if include_punct or include_struct:
-        struct_pipe = SKPipeline([
-            ("fe", StructureFeaturizer(include_punct=include_punct, include_struct=include_struct)),
-            ("dv", DictVectorizer())
-        ])
-        branches.append(("struct", struct_pipe))
-
-    # union or single
-    if len(branches) == 1:
-        features = branches[0][1]
-    else:
-        features = FeatureUnion(branches)
-
-    # classifier
-    cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
-    clf = LogisticRegression(max_iter=1000, C=float(args.C), class_weight=cw)
-
-    return SKPipeline([("features", features), ("clf", clf)])
-
-
+# return: list[dict]
 def evaluate(gold, pred, tag, y_score=None):
     acc = accuracy_score(gold, pred)
     prec = precision_score(gold, pred, pos_label=1, zero_division=0)
@@ -113,139 +28,97 @@ def evaluate(gold, pred, tag, y_score=None):
     print(f"[{tag}] Acc={acc:.3f}  Prec(pos=1)={prec:.3f}  Rec(pos=1)={rec:.3f}")
     print(f"[{tag}] Confusion Matrix:\n{cm}")
 
-    # Extended metrics (only if a continuous score is provided)
+    # Extended metric
     if y_score is not None:
+        # Per-class metrics
+        p_c, r_c, f1_c, supp_c = precision_recall_fscore_support(
+            gold, pred, labels=[0, 1], zero_division=0
+        )
+        # Macro/micro
+        p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(
+            gold, pred, average="macro", zero_division=0
+        )
+        p_micro, r_micro, f1_micro, _ = precision_recall_fscore_support(
+            gold, pred, average="micro", zero_division=0
+        )
+        # AUCs
         try:
-            from sklearn.metrics import (
-                precision_recall_fscore_support,
-                roc_auc_score,
-                average_precision_score,
-            )
-            # Per-class metrics
-            p_c, r_c, f1_c, supp_c = precision_recall_fscore_support(
-                gold, pred, labels=[0, 1], zero_division=0
-            )
-            # Macro/micro
-            p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(
-                gold, pred, average="macro", zero_division=0
-            )
-            p_micro, r_micro, f1_micro, _ = precision_recall_fscore_support(
-                gold, pred, average="micro", zero_division=0
-            )
-            # AUCs (guard single-class)
-            try:
-                roc_auc = roc_auc_score(gold, y_score)
-            except Exception:
-                roc_auc = None
-            try:
-                pr_auc = average_precision_score(gold, y_score)
-            except Exception:
-                pr_auc = None
+            roc_auc = roc_auc_score(gold, y_score)
+        except Exception:
+            roc_auc = None
+        try:
+            pr_auc = average_precision_score(gold, y_score)
+        except Exception:
+            pr_auc = None
 
-            print(f"[{tag}] Per-class:")
-            print(f"  class 0: prec={p_c[0]:.3f} rec={r_c[0]:.3f} f1={f1_c[0]:.3f} support={supp_c[0]}")
-            print(f"  class 1: prec={p_c[1]:.3f} rec={r_c[1]:.3f} f1={f1_c[1]:.3f} support={supp_c[1]}")
-            print(f"[{tag}] Macro: prec={p_macro:.3f} rec={r_macro:.3f} f1={f1_macro:.3f}")
-            print(f"[{tag}] Micro: prec={p_micro:.3f} rec={r_micro:.3f} f1={f1_micro:.3f}")
-            print(f"[{tag}] ROC-AUC: {'N/A' if roc_auc is None else f'{roc_auc:.3f}'}")
-            print(f"[{tag}] PR-AUC:  {'N/A' if pr_auc is None else f'{pr_auc:.3f}'}")
-        except Exception as e:
-            print(f"[{tag}] Extended metrics error: {e}")
+        print(f"[{tag}] Per-class:")
+        print(f"  class 0: prec={p_c[0]:.3f} rec={r_c[0]:.3f} f1={f1_c[0]:.3f} support={supp_c[0]}")
+        print(f"  class 1: prec={p_c[1]:.3f} rec={r_c[1]:.3f} f1={f1_c[1]:.3f} support={supp_c[1]}")
+        print(f"[{tag}] Macro: prec={p_macro:.3f} rec={r_macro:.3f} f1={f1_macro:.3f}")
+        print(f"[{tag}] Micro: prec={p_micro:.3f} rec={r_micro:.3f} f1={f1_micro:.3f}")
+        print(f"[{tag}] ROC-AUC: {'N/A' if roc_auc is None else f'{roc_auc:.3f}'}")
+        print(f"[{tag}] PR-AUC:  {'N/A' if pr_auc is None else f'{pr_auc:.3f}'}")
 
+# helper for identifier printing when using manual feature composition
+def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False, word_cutoff=0):
+    kept_indices = []
+    for i, name in enumerate(feature_names):
+        if ignore_terms and isinstance(name, str) and name.startswith("tfidf::"):
+            term = name.split("::", 1)[1].lower()
+            if term in IGNORE_TERMS:
+                continue
+        kept_indices.append(i)
+    if not kept_indices:
+        print(f"[{dataset_tag}][LogReg] No terms left after filtering.")
+        return
 
-# ------------------------
-# Feature introspection
-# ------------------------
+    pos_sorted = sorted(kept_indices, key=lambda i: coefs[i], reverse=True)
+    neg_sorted = sorted(kept_indices, key=lambda i: coefs[i])
 
-def get_vec_clf(pipeline):
-    """
-    Extract TfidfVectorizer and LogisticRegression from a sklearn Pipeline; tolerant of step names.
-    """
-    vec = getattr(pipeline, "named_steps", {}).get("tfidfvectorizer")
-    clf = getattr(pipeline, "named_steps", {}).get("logisticregression")
-    if vec is None or clf is None:
-        for _, step in getattr(pipeline, "named_steps", {}).items():
-            n = step.__class__.__name__.lower()
-            if n == "tfidfvectorizer":
-                vec = step
-            if n == "logisticregression":
-                clf = step
-    return vec, clf
+    print(f"[{dataset_tag}][LogReg] Top {top_k} clickbait indicators:")
+    for i in pos_sorted[:top_k]:
+        print(f"  {feature_names[i]}: {coefs[i]:.4f}")
 
-
-# description: Print top positive/negative weighted word features for a linear model when a single TfidfVectorizer is used.
-# params: pipeline (sklearn Pipeline), dataset_tag (str), top_k (int=TOP_IDENTS)
-# return: None (prints to stdout)
-def show_top_identifiers(pipeline, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False):
-    try:
-        # Prefer the new structure (features + clf)
-        vec = getattr(pipeline, "named_steps", {}).get("features")
-        clf = getattr(pipeline, "named_steps", {}).get("clf")
-        if vec is None or clf is None:
-            # Fallback to older naming (tfidfvectorizer + logisticregression)
-            vec, clf = get_vec_clf(pipeline)
-
-        # Only support a single TfidfVectorizer (word) branch for clear mapping
-        from sklearn.feature_extraction.text import TfidfVectorizer as _TV
-        from sklearn.pipeline import FeatureUnion as _FU
-        if isinstance(vec, _FU):
-            print(f"[{dataset_tag}][LogReg] Identifier printing not supported with multiple feature branches (FeatureUnion).")
-            return
-        if not isinstance(vec, _TV) or not hasattr(clf, "coef_"):
-            print(f"[{dataset_tag}][LogReg] Unable to extract word feature names or coefficients.")
-            return
-
-        feature_names = vec.get_feature_names_out()
-        coefs = clf.coef_[0]
-
-        if ignore_terms:
-            kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
-        else:
-            kept_indices = list(range(len(feature_names)))
-        if not kept_indices:
-            print(f"[{dataset_tag}][LogReg] No terms left after filtering.")
-            return
-
-        pos_sorted = sorted(kept_indices, key=lambda i: coefs[i], reverse=True)
-        neg_sorted = sorted(kept_indices, key=lambda i: coefs[i])
-
-        print(f"[{dataset_tag}][LogReg] Top {top_k} clickbait indicators:")
-        for i in pos_sorted[:top_k]:
-            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-
-        print(f"[{dataset_tag}][LogReg] Top {top_k} news indicators:")
-        for i in neg_sorted[:top_k]:
-            print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-    except Exception as e:
-        print(f"[{dataset_tag}][LogReg] Error printing top identifiers: {e}")
-
+    print(f"[{dataset_tag}][LogReg] Top {top_k} news indicators:")
+    for i in neg_sorted[:top_k]:
+        print(f"  {feature_names[i]}: {coefs[i]:.4f}")
 
 # ------------------------
-# Orchestration
+# Unified feature builder (example-style, no hstack)
 # ------------------------
+def build_doc_dicts(texts, Xw, word_names, include_punct=False, include_struct=False):
+    out = []
+    for i in range(Xw.shape[0]):
+        row = Xw.getrow(i)
+        d = {}
+        for j, v in zip(row.indices, row.data):
+            d[f"tfidf::{word_names[j]}"] = float(v)
+        if include_punct or include_struct:
+            d.update(
+                compute_extra_features(
+                    texts[i] or "",
+                    include_punct=include_punct,
+                    include_struct=include_struct,
+                )
+            )
+        out.append(d)
+    return out
+
+# == orchestration == 
 
 # description: Train/evaluate TF-IDF + Logistic Regression on a deterministic 80/20 split with extended metrics.
-# params: dataset (str), X_texts (list[str]), y (list[int]), args (Namespace with vectorizer/LR params)
-# return: None (prints metrics to stdout)
-# description: Train/evaluate TF-IDF (+ optional char/struct) + Logistic Regression on a deterministic 80/20 split.
-# params: dataset (str), X_texts (list[str]), y (list[int]), args (Namespace)
-# return: None (prints metrics to stdout)
 def train_and_evaluate_lr(dataset, X_texts, y, args):
-    # Shuffle deterministically to avoid ordered-split pathologies
     docs = list(zip(X_texts, y))
     rnd = random.Random(42)
     rnd.shuffle(docs)
     X_texts, y = zip(*docs) if docs else ([], [])
 
     n = len(X_texts)
-    if n == 0:
-        print(f"[{dataset}] No data loaded; skipping.")
-        return
     k = max(1, int(0.8 * n))
     X_train, X_test = X_texts[:k], X_texts[k:]
     y_train, y_test = y[:k], y[k:]
 
-    # Log test distribution
+    # check distribution
     pos_test = sum(1 for v in y_test if v == 1)
     neg_test = len(y_test) - pos_test
     print(f"[{dataset}] Test split distribution: pos={pos_test} neg={neg_test} (n={len(y_test)})")
@@ -254,13 +127,42 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     eff_min_df = 5 if getattr(args, "min_df_high", False) else args.min_df
     eff_max_df = 0.95 if getattr(args, "min_df_high", False) else (None if args.max_df == 1.0 else args.max_df)
 
-    pipe = build_lr_pipeline_from_args(args, eff_min_df=int(eff_min_df), eff_max_df=eff_max_df)
-    pipe.fit(X_train, y_train)
-    preds = pipe.predict(X_test)
+    # Build word TF-IDF (explicit args; unigrams by default)
+    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
+    if eff_max_df is not None:
+        vec = TfidfVectorizer(
+            stop_words=stop_words,
+            min_df=int(eff_min_df),
+            max_df=float(eff_max_df)
+        )
+    else:
+        vec = TfidfVectorizer(
+            stop_words=stop_words,
+            min_df=int(eff_min_df)
+        )
+    vec.fit(X_train)
+    Xw_tr = vec.transform(X_train)
+    Xw_te = vec.transform(X_test)
+
+    # Unified document feature dicts (no hstack): merge TF-IDF and struct signals
+    include_punct = getattr(args, "punct_signals", False)
+    include_struct = getattr(args, "struct_features", False)
+    word_names = vec.get_feature_names_out().tolist()
+    feats_tr = build_doc_dicts(X_train, Xw_tr, word_names, include_punct=include_punct, include_struct=include_struct)
+    feats_te = build_doc_dicts(X_test, Xw_te, word_names, include_punct=include_punct, include_struct=include_struct)
+    dv = DictVectorizer()
+    X_tr = dv.fit_transform(feats_tr)
+    X_te = dv.transform(feats_te)
+
+    # Classifier
+    cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
+    clf = LogisticRegression(max_iter=1000, C=float(args.C), class_weight=cw)
+    clf.fit(X_tr, y_train)
+    preds = clf.predict(X_te)
 
     # Continuous scores for AUCs
     try:
-        y_score = pipe.predict_proba(X_test)[:, 1]
+        y_score = clf.predict_proba(X_te)[:, 1]
     except Exception:
         y_score = None
 
@@ -268,13 +170,24 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
+        # Feature names from unified DictVectorizer
+        try:
+            feature_names = dv.get_feature_names_out().tolist()
+        except Exception:
+            feature_names = list(getattr(dv, "feature_names_", []))
         top_k = args.top_k if hasattr(args, "top_k") else TOP_IDENTS
-        show_top_identifiers(pipe, dataset.capitalize(), top_k=top_k, ignore_terms=getattr(args, "ignore_terms", False))
+        show_top_identifiers_from_names(
+            feature_names,
+            clf.coef_[0],
+            dataset.capitalize(),
+            top_k=top_k,
+            ignore_terms=getattr(args, "ignore_terms", False),
+        )
 
 
 def run_for_dataset(dataset, args):
     print(f"\n=== {dataset.capitalize()} (Logistic Regression) ===")
-    X_texts, y = get_texts_labels_for(dataset)
+    X_texts, y = load_texts_labels_unified(dataset)
     if not X_texts or not y:
         print(f"[{dataset}] No data loaded; skipping.")
         return

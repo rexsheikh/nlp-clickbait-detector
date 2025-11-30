@@ -5,7 +5,6 @@ from pathlib import Path
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import SGDClassifier
-from sklearn.pipeline import make_pipeline as mkpipe, FeatureUnion, Pipeline as SKPipeline
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics import (
     accuracy_score,
@@ -17,15 +16,13 @@ from sklearn.metrics import (
     average_precision_score,
 )
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from utility.dataLoader import load_texts_labels as load_texts_labels_unified  # noqa: E402
 from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS
-
-
-
 
 
 # ------------------------
@@ -43,70 +40,11 @@ def get_texts_labels_for(dataset):
 # description: Featurizer to extract structure/punctuation features from raw text.
 # params: include_punct (bool), include_struct (bool)
 # return: sklearn-compatible transformer producing list[dict]
-class StructureFeaturizer:
-    def __init__(self, include_punct=False, include_struct=False):
-        self.include_punct = include_punct
-        self.include_struct = include_struct
-
-    def fit(self, X, y=None):
-        return self
-
-
-    def transform(self, X):
-        out = []
-        for t in X:
-            s = t or ""
-            d = compute_extra_features(s, include_punct=self.include_punct, include_struct=self.include_struct)
-            out.append(d)
-        return out
 
 
 # description: Build a unioned feature extractor (word + optional char + optional structure) and SVM-SGD classifier.
 # params: args (Namespace with flags), eff_min_df (int), eff_max_df (float|None)
 # return: sklearn Pipeline
-def build_svm_pipeline_from_args(args, eff_min_df, eff_max_df):
-    branches = []
-    # word branch
-    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
-    word_vec = TfidfVectorizer(
-        ngram_range=(1, 1),
-        min_df=int(eff_min_df),
-        stop_words=stop_words,
-        **({} if eff_max_df is None else {"max_df": float(eff_max_df)})
-    )
-    branches.append(("word", word_vec))
-
-
-    # structure branch
-    include_punct = getattr(args, "punct_signals", False)
-    include_struct = getattr(args, "struct_features", False)
-    if include_punct or include_struct:
-        struct_pipe = SKPipeline([
-            ("fe", StructureFeaturizer(include_punct=include_punct, include_struct=include_struct)),
-            ("dv", DictVectorizer())
-        ])
-        branches.append(("struct", struct_pipe))
-
-    # union or single
-    if len(branches) == 1:
-        features = branches[0][1]
-    else:
-        features = FeatureUnion(branches)
-
-    # classifier
-    cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
-    clf = SGDClassifier(
-        loss="hinge",
-        alpha=float(args.alpha),
-        penalty=str(args.penalty),
-        l1_ratio=float(args.l1_ratio),
-        max_iter=1000,
-        tol=1e-3,
-        class_weight=cw,
-        random_state=42,
-    )
-
-    return SKPipeline([("features", features), ("clf", clf)])
 
 
 # ------------------------
@@ -162,44 +100,53 @@ def evaluate(gold, pred, tag, y_score=None):
 # description: Print top positive/negative weighted word features for a linear model when a single TfidfVectorizer is used.
 # params: pipeline (sklearn Pipeline), dataset_tag (str), top_k (int=TOP_IDENTS)
 # return: None (prints to stdout)
-def show_top_identifiers(pipeline, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False):
+
+# ------------------------
+# Helper for identifier printing when using manual feature composition
+# ------------------------
+def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False, word_cutoff=0):
     try:
-        vec = getattr(pipeline, "named_steps", {}).get("features")
-        clf = getattr(pipeline, "named_steps", {}).get("clf")
-
-        # Only support a single TfidfVectorizer (word) branch for clear mapping
-        from sklearn.feature_extraction.text import TfidfVectorizer as _TV
-        from sklearn.pipeline import FeatureUnion as _FU
-        if isinstance(vec, _FU):
-            print(f"[{dataset_tag}][SVM-SGD] Identifier printing not supported with multiple feature branches (FeatureUnion).")
-            return
-        if not isinstance(vec, _TV) or not hasattr(clf, "coef_"):
-            print(f"[{dataset_tag}][SVM-SGD] Unable to extract word feature names or coefficients.")
-            return
-
-        feature_names = vec.get_feature_names_out()
-        coefs = clf.coef_[0]
-
-        if ignore_terms:
-            kept_indices = [i for i, name in enumerate(feature_names) if name.lower() not in IGNORE_TERMS]
-        else:
-            kept_indices = list(range(len(feature_names)))
+        kept_indices = []
+        for i, name in enumerate(feature_names):
+            if ignore_terms and isinstance(name, str) and name.startswith("tfidf::"):
+                term = name.split("::", 1)[1].lower()
+                if term in IGNORE_TERMS:
+                    continue
+            kept_indices.append(i)
         if not kept_indices:
             print(f"[{dataset_tag}][SVM-SGD] No terms left after filtering.")
             return
-
         pos_sorted = sorted(kept_indices, key=lambda i: coefs[i], reverse=True)
         neg_sorted = sorted(kept_indices, key=lambda i: coefs[i])
-
         print(f"[{dataset_tag}][SVM-SGD] Top {top_k} clickbait indicators:")
         for i in pos_sorted[:top_k]:
             print(f"  {feature_names[i]}: {coefs[i]:.4f}")
-
         print(f"[{dataset_tag}][SVM-SGD] Top {top_k} news indicators:")
         for i in neg_sorted[:top_k]:
             print(f"  {feature_names[i]}: {coefs[i]:.4f}")
     except Exception as e:
-        print(f"[{dataset_tag}][SVM-SGD] Error printing top identifiers: {e}")
+        print(f"[{dataset_tag}][SVM-SGD] Error printing top identifiers (names): {e}")
+
+# ------------------------
+# Unified feature builder (example-style, no hstack)
+# ------------------------
+def build_doc_dicts(texts, Xw, word_names, include_punct=False, include_struct=False):
+    out = []
+    for i in range(Xw.shape[0]):
+        row = Xw.getrow(i)
+        d = {}
+        for j, v in zip(row.indices, row.data):
+            d[f"tfidf::{word_names[j]}"] = float(v)
+        if include_punct or include_struct:
+            d.update(
+                compute_extra_features(
+                    texts[i] or "",
+                    include_punct=include_punct,
+                    include_struct=include_struct,
+                )
+            )
+        out.append(d)
+    return out
 
 # ------------------------
 # Orchestration
@@ -232,13 +179,51 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     eff_min_df = 5 if getattr(args, "min_df_high", False) else args.min_df
     eff_max_df = 0.95 if getattr(args, "min_df_high", False) else (None if args.max_df == 1.0 else args.max_df)
 
-    pipe = build_svm_pipeline_from_args(args, eff_min_df=int(eff_min_df), eff_max_df=eff_max_df)
-    pipe.fit(X_train, y_train)
-    preds = pipe.predict(X_test)
+    # Build word TF-IDF (explicit args; unigrams by default)
+    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
+    if eff_max_df is not None:
+        vec = TfidfVectorizer(
+            stop_words=stop_words,
+            min_df=int(eff_min_df),
+            max_df=float(eff_max_df)
+        )
+    else:
+        vec = TfidfVectorizer(
+            stop_words=stop_words,
+            min_df=int(eff_min_df)
+        )
+    vec.fit(X_train)
+    Xw_tr = vec.transform(X_train)
+    Xw_te = vec.transform(X_test)
+
+    # Unified document feature dicts (no hstack): merge TF-IDF and struct signals
+    include_punct = getattr(args, "punct_signals", False)
+    include_struct = getattr(args, "struct_features", False)
+    word_names = vec.get_feature_names_out().tolist()
+    feats_tr = build_doc_dicts(X_train, Xw_tr, word_names, include_punct=include_punct, include_struct=include_struct)
+    feats_te = build_doc_dicts(X_test, Xw_te, word_names, include_punct=include_punct, include_struct=include_struct)
+    dv = DictVectorizer()
+    X_tr = dv.fit_transform(feats_tr)
+    X_te = dv.transform(feats_te)
+
+    # Classifier (SGD SVM)
+    cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
+    clf = SGDClassifier(
+        loss="hinge",
+        alpha=float(args.alpha),
+        penalty=str(args.penalty),
+        l1_ratio=float(args.l1_ratio),
+        max_iter=1000,
+        tol=1e-3,
+        class_weight=cw,
+        random_state=42,
+    )
+    clf.fit(X_tr, y_train)
+    preds = clf.predict(X_te)
 
     # Continuous scores for AUCs (decision function margin works for ROC/PR AUC)
     try:
-        y_score = pipe.decision_function(X_test)
+        y_score = clf.decision_function(X_te)
     except Exception:
         y_score = None
 
@@ -246,8 +231,19 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
+        # Feature names from unified DictVectorizer
+        try:
+            feature_names = dv.get_feature_names_out().tolist()
+        except Exception:
+            feature_names = list(getattr(dv, "feature_names_", []))
         top_k = args.top_k if hasattr(args, "top_k") else TOP_IDENTS
-        show_top_identifiers(pipe, dataset.capitalize(), top_k=top_k, ignore_terms=getattr(args, "ignore_terms", False))
+        show_top_identifiers_from_names(
+            feature_names,
+            clf.coef_[0],
+            dataset.capitalize(),
+            top_k=top_k,
+            ignore_terms=getattr(args, "ignore_terms", False),
+        )
 
 
 def run_for_dataset(dataset, args):
@@ -279,7 +275,7 @@ def main():
     parser.add_argument("--min-df-high", action="store_true", help="Use higher pruning (min_df=5, max_df=0.95)")
 
     # Diagnostics
-    parser.add_argument("--show-identifiers", action="store_true", help="Print top positive/negative weighted features (limited support under unions)")
+    parser.add_argument("--show-identifiers", action="store_true", help="Print top positive/negative weighted features")
     parser.add_argument("--top-k", type=int, default=10, help="Top K terms to display in identifier printouts")
 
     args = parser.parse_args()
