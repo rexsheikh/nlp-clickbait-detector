@@ -3,3 +3,4 @@ data/
 to-do.txt
 .DS_Store
 usage.md
+__pycache__
