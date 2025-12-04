@@ -21,37 +21,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from utility.dataLoader import load_texts_labels as load_texts_labels_unified  # noqa: E402
-from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS
+from utility.dataLoader import load_texts_labels as load_texts_labels_unified
+from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS, get_stopwords
 
-
-# ------------------------
-# Data loading helper
-# ------------------------
 
 def get_texts_labels_for(dataset):
     return load_texts_labels_unified(dataset)
 
 
-# ------------------------
-# SVM (SGD) feature builders
-# ------------------------
+#== metrics ==
 
-# description: Featurizer to extract structure/punctuation features from raw text.
-# params: include_punct (bool), include_struct (bool)
-# return: sklearn-compatible transformer producing list[dict]
-
-
-# description: Build a unioned feature extractor (word + optional char + optional structure) and SVM-SGD classifier.
-# params: args (Namespace with flags), eff_min_df (int), eff_max_df (float|None)
-# return: sklearn Pipeline
-
-
-# ------------------------
-# Metrics
-# ------------------------
-
-# description: Print core and extended metrics; extended metrics only when y_score is provided.
+# description: Print core and extended metrics (when applied)
 # params: gold (list[int]), pred (list[int]), tag (str), y_score (array-like|None)
 # return: None (prints to stdout)
 def evaluate(gold, pred, tag, y_score=None):
@@ -93,24 +73,22 @@ def evaluate(gold, pred, tag, y_score=None):
             print(f"[{tag}] Extended metrics error: {e}")
 
 
-# ------------------------
-# Feature introspection
-# ------------------------
-
 # description: Print top positive/negative weighted word features for a linear model when a single TfidfVectorizer is used.
 # params: pipeline (sklearn Pipeline), dataset_tag (str), top_k (int=TOP_IDENTS)
 # return: None (prints to stdout)
 
-# ------------------------
-# Helper for identifier printing when using manual feature composition
-# ------------------------
-def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False, word_cutoff=0):
+def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False, stopword_filter=False, word_cutoff=0):
     try:
+        stopword_terms = get_stopwords(True) if stopword_filter else set()
         kept_indices = []
         for i, name in enumerate(feature_names):
             if ignore_terms and isinstance(name, str) and name.startswith("tfidf::"):
                 term = name.split("::", 1)[1].lower()
                 if term in IGNORE_TERMS:
+                    continue
+            if stopword_terms and isinstance(name, str) and name.startswith("tfidf::"):
+                term = name.split("::", 1)[1].lower()
+                if term in stopword_terms:
                     continue
             kept_indices.append(i)
         if not kept_indices:
@@ -127,9 +105,6 @@ def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP
     except Exception as e:
         print(f"[{dataset_tag}][SVM-SGD] Error printing top identifiers (names): {e}")
 
-# ------------------------
-# Unified feature builder (example-style, no hstack)
-# ------------------------
 def build_doc_dicts(texts, Xw, word_names, include_punct=False, include_struct=False):
     out = []
     for i in range(Xw.shape[0]):
@@ -148,20 +123,14 @@ def build_doc_dicts(texts, Xw, word_names, include_punct=False, include_struct=F
         out.append(d)
     return out
 
-# ------------------------
-# Orchestration
-# ------------------------
-
-# description: Train/evaluate TF-IDF (+ optional char/struct) + Linear SVM (SGD) on a deterministic 80/20 split.
+# description: Train/evaluate TF-IDF ( with any optional char/struct) and SVMSGD on a deterministic 80/20 split.
 # params: dataset (str), X_texts (list[str]), y (list[int]), args (Namespace)
 # return: None (prints metrics to stdout)
 def train_and_evaluate_svm(dataset, X_texts, y, args):
-    # Shuffle deterministically to avoid ordered-split pathologies
     docs = list(zip(X_texts, y))
     rnd = random.Random(42)
     rnd.shuffle(docs)
     X_texts, y = zip(*docs) if docs else ([], [])
-
     n = len(X_texts)
     if n == 0:
         print(f"[{dataset}] No data loaded; skipping.")
@@ -170,17 +139,22 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     X_train, X_test = X_texts[:k], X_texts[k:]
     y_train, y_test = y[:k], y[k:]
 
-    # Log test distribution
+    # log distribution
     pos_test = sum(1 for v in y_test if v == 1)
     neg_test = len(y_test) - pos_test
     print(f"[{dataset}] Test split distribution: pos={pos_test} neg={neg_test} (n={len(y_test)})")
 
-    # Effective pruning settings
+    # effective pruning settings (set low to prune out noise, high to prune high freq words)
     eff_min_df = 5 if getattr(args, "min_df_high", False) else args.min_df
     eff_max_df = 0.95 if getattr(args, "min_df_high", False) else (None if args.max_df == 1.0 else args.max_df)
 
-    # Build word TF-IDF (explicit args; unigrams by default)
-    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
+    # build tf-idf 
+    stop_words = set()
+    if getattr(args, "use_stopwords", False):
+        stop_words.update(get_stopwords(True))
+    if getattr(args, "ignore_terms", False):
+        stop_words.update(IGNORE_TERMS)
+    stop_words = sorted(stop_words) if stop_words else None
     if eff_max_df is not None:
         vec = TfidfVectorizer(
             stop_words=stop_words,
@@ -196,7 +170,7 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     Xw_tr = vec.transform(X_train)
     Xw_te = vec.transform(X_test)
 
-    # Unified document feature dicts (no hstack): merge TF-IDF and struct signals
+    # document feature dicts
     include_punct = getattr(args, "punct_signals", False)
     include_struct = getattr(args, "struct_features", False)
     word_names = vec.get_feature_names_out().tolist()
@@ -206,7 +180,7 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     X_tr = dv.fit_transform(feats_tr)
     X_te = dv.transform(feats_te)
 
-    # Classifier (SGD SVM)
+    # classifier - using hinge loss
     cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
     clf = SGDClassifier(
         loss="hinge",
@@ -221,7 +195,7 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     clf.fit(X_tr, y_train)
     preds = clf.predict(X_te)
 
-    # Continuous scores for AUCs (decision function margin works for ROC/PR AUC)
+    # aucs
     try:
         y_score = clf.decision_function(X_te)
     except Exception:
@@ -231,7 +205,6 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
     evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
-        # Feature names from unified DictVectorizer
         try:
             feature_names = dv.get_feature_names_out().tolist()
         except Exception:
@@ -243,6 +216,7 @@ def train_and_evaluate_svm(dataset, X_texts, y, args):
             dataset.capitalize(),
             top_k=top_k,
             ignore_terms=getattr(args, "ignore_terms", False),
+            stopword_filter=getattr(args, "use_stopwords", False),
         )
 
 
@@ -272,6 +246,7 @@ def main():
     parser.add_argument("--punct-signals", action="store_true", help="Add punctuation signals (exclaim/qmark/emoji)")
     parser.add_argument("--struct-features", action="store_true", help="Add length/structure features")
     parser.add_argument("--ignore-terms", action="store_true", default=False, help="Ignore common terms (IGNORE_TERMS) during featurization/identifiers")
+    parser.add_argument("--use-stopwords", action="store_true", default=False, help="Remove standard English stopwords during TF-IDF featurization")
     parser.add_argument("--min-df-high", action="store_true", help="Use higher pruning (min_df=5, max_df=0.95)")
 
     # Diagnostics
@@ -280,18 +255,18 @@ def main():
 
     args = parser.parse_args()
 
-    # Apply design presets
+   # preset tests 
     if args.design:
         presets = {
             "baseline": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-1": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-2": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="none"),
-            "L8-3": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
-            "L8-4": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-5": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
-            "L8-6": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="balanced"),
-            "L8-7": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
-            "L8-8": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "test1": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
+            "test2": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="none"),
+            "test3": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
+            "test4": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="none"),
+            "test5": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "test6": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="balanced"),
+            "test7": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
+            "test8": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
         }
         cfg = presets.get(args.design, {})
         for k, v in cfg.items():

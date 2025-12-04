@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from utility.dataLoader import load_texts_labels as load_texts_labels_unified
-from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS
+from utility.common_text import compute_extra_features, TOP_IDENTS, IGNORE_TERMS, get_stopwords
 
 
 
@@ -28,20 +28,20 @@ def evaluate(gold, pred, tag, y_score=None):
     print(f"[{tag}] Acc={acc:.3f}  Prec(pos=1)={prec:.3f}  Rec(pos=1)={rec:.3f}")
     print(f"[{tag}] Confusion Matrix:\n{cm}")
 
-    # Extended metric
+    # extended metric
     if y_score is not None:
-        # Per-class metrics
+        # per-class metrics
         p_c, r_c, f1_c, supp_c = precision_recall_fscore_support(
             gold, pred, labels=[0, 1], zero_division=0
         )
-        # Macro/micro
+        # macro/micro
         p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(
             gold, pred, average="macro", zero_division=0
         )
         p_micro, r_micro, f1_micro, _ = precision_recall_fscore_support(
             gold, pred, average="micro", zero_division=0
         )
-        # AUCs
+        # aucs
         try:
             roc_auc = roc_auc_score(gold, y_score)
         except Exception:
@@ -60,12 +60,17 @@ def evaluate(gold, pred, tag, y_score=None):
         print(f"[{tag}] PR-AUC:  {'N/A' if pr_auc is None else f'{pr_auc:.3f}'}")
 
 # helper for identifier printing when using manual feature composition
-def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False, word_cutoff=0):
+def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP_IDENTS, ignore_terms=False, stopword_filter=False, word_cutoff=0):
+    stopword_terms = get_stopwords(True) if stopword_filter else set()
     kept_indices = []
     for i, name in enumerate(feature_names):
         if ignore_terms and isinstance(name, str) and name.startswith("tfidf::"):
             term = name.split("::", 1)[1].lower()
             if term in IGNORE_TERMS:
+                continue
+        if stopword_terms and isinstance(name, str) and name.startswith("tfidf::"):
+            term = name.split("::", 1)[1].lower()
+            if term in stopword_terms:
                 continue
         kept_indices.append(i)
     if not kept_indices:
@@ -83,9 +88,7 @@ def show_top_identifiers_from_names(feature_names, coefs, dataset_tag, top_k=TOP
     for i in neg_sorted[:top_k]:
         print(f"  {feature_names[i]}: {coefs[i]:.4f}")
 
-# ------------------------
-# Unified feature builder (example-style, no hstack)
-# ------------------------
+#== feature builder (unused in report/presentation but potentially useful for follow on work)
 def build_doc_dicts(texts, Xw, word_names, include_punct=False, include_struct=False):
     out = []
     for i in range(Xw.shape[0]):
@@ -106,7 +109,7 @@ def build_doc_dicts(texts, Xw, word_names, include_punct=False, include_struct=F
 
 # == orchestration == 
 
-# description: Train/evaluate TF-IDF + Logistic Regression on a deterministic 80/20 split with extended metrics.
+# description: train/evaluate TF-IDF + LR on a deterministic 80/20 split with extended metrics.
 def train_and_evaluate_lr(dataset, X_texts, y, args):
     docs = list(zip(X_texts, y))
     rnd = random.Random(42)
@@ -123,12 +126,17 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     neg_test = len(y_test) - pos_test
     print(f"[{dataset}] Test split distribution: pos={pos_test} neg={neg_test} (n={len(y_test)})")
 
-    # Effective pruning settings
+    # pruning settings - a low df will remove noisy features (overfitting), a high df removes near stopwords (very high freq)
     eff_min_df = 5 if getattr(args, "min_df_high", False) else args.min_df
     eff_max_df = 0.95 if getattr(args, "min_df_high", False) else (None if args.max_df == 1.0 else args.max_df)
 
-    # Build word TF-IDF (explicit args; unigrams by default)
-    stop_words = IGNORE_TERMS if getattr(args, "ignore_terms", False) else None
+    # build tf-idf according to args
+    stop_words = set()
+    if getattr(args, "use_stopwords", False):
+        stop_words.update(get_stopwords(True))
+    if getattr(args, "ignore_terms", False):
+        stop_words.update(IGNORE_TERMS)
+    stop_words = sorted(stop_words) if stop_words else None
     if eff_max_df is not None:
         vec = TfidfVectorizer(
             stop_words=stop_words,
@@ -144,7 +152,7 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     Xw_tr = vec.transform(X_train)
     Xw_te = vec.transform(X_test)
 
-    # Unified document feature dicts (no hstack): merge TF-IDF and struct signals
+    # merge TF-IDF and any struct signals
     include_punct = getattr(args, "punct_signals", False)
     include_struct = getattr(args, "struct_features", False)
     word_names = vec.get_feature_names_out().tolist()
@@ -154,13 +162,13 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     X_tr = dv.fit_transform(feats_tr)
     X_te = dv.transform(feats_te)
 
-    # Classifier
+    # classifier
     cw = None if (args.class_weight is None or str(args.class_weight).lower() == "none") else "balanced"
     clf = LogisticRegression(max_iter=1000, C=float(args.C), class_weight=cw)
     clf.fit(X_tr, y_train)
     preds = clf.predict(X_te)
 
-    # Continuous scores for AUCs
+    # continuous scores for AUCs
     try:
         y_score = clf.predict_proba(X_te)[:, 1]
     except Exception:
@@ -170,7 +178,6 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
     evaluate(y_test, preds, tag, y_score=y_score)
 
     if args.show_identifiers:
-        # Feature names from unified DictVectorizer
         try:
             feature_names = dv.get_feature_names_out().tolist()
         except Exception:
@@ -182,6 +189,7 @@ def train_and_evaluate_lr(dataset, X_texts, y, args):
             dataset.capitalize(),
             top_k=top_k,
             ignore_terms=getattr(args, "ignore_terms", False),
+            stopword_filter=getattr(args, "use_stopwords", False),
         )
 
 
@@ -205,28 +213,29 @@ def main():
     parser.add_argument("--punct-signals", action="store_true", help="Add punctuation signals (exclaim/qmark/emoji)")
     parser.add_argument("--struct-features", action="store_true", help="Add length/structure features")
     parser.add_argument("--ignore-terms", action="store_true", default=False, help="Ignore common terms (IGNORE_TERMS) during featurization/identifiers")
+    parser.add_argument("--use-stopwords", action="store_true", default=False, help="Remove standard English stopwords during TF-IDF featurization")
     parser.add_argument("--min-df-high", action="store_true", help="Use higher pruning (min_df=5, max_df=0.95)")
     parser.add_argument("--C", type=float, default=1.0, help="Inverse regularization strength for LogisticRegression")
     parser.add_argument("--class-weight", choices=["none", "balanced"], default="none", help="Class weight setting")
 
-    # Diagnostics
+    # diagnostics
     parser.add_argument("--show-identifiers", action="store_true", help="Print top positive/negative weighted features")
     parser.add_argument("--top-k", type=int, default=10, help="Top K terms to display in identifier printouts")
 
     args = parser.parse_args()
 
-    # Apply design presets
+    # some design presets combined into single cli commands
     if args.design:
         presets = {
             "baseline": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-1": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-2": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="none"),
-            "L8-3": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
-            "L8-4": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="none"),
-            "L8-5": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
-            "L8-6": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="balanced"),
-            "L8-7": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
-            "L8-8": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "test1": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="none"),
+            "test2": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="none"),
+            "test3": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="none"),
+            "test4": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="none"),
+            "test5": dict(punct_signals=False, struct_features=True,  min_df_high=True,  class_weight="balanced"),
+            "test6": dict(punct_signals=False, struct_features=False, min_df_high=False, class_weight="balanced"),
+            "test7": dict(punct_signals=True,  struct_features=False, min_df_high=False, class_weight="balanced"),
+            "test8": dict(punct_signals=True,  struct_features=True,  min_df_high=True,  class_weight="balanced"),
         }
         cfg = presets.get(args.design, {})
         for k, v in cfg.items():

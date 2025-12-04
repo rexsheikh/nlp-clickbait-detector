@@ -1,0 +1,87 @@
+=== Naive Bayes Baseline (defaults) ===
+
+=== Kaggle (Naive Bayes) ===
+[kaggle] Test split distribution: pos=3160 neg=3240 (n=6400)
+[kaggle][NaiveBayes][Baseline][topN=2000]] Acc=0.990  Prec(pos=1)=0.988  Rec(pos=1)=0.991
+[kaggle][NaiveBayes][Baseline][topN=2000]] Confusion Matrix:
+[[3203   37]
+ [  27 3133]]
+[kaggle][NaiveBayes][Baseline][topN=2000]] Per-class:
+  class 0: prec=0.992 rec=0.989 f1=0.990 support=3240
+  class 1: prec=0.988 rec=0.991 f1=0.990 support=3160
+[kaggle][NaiveBayes][Baseline][topN=2000]] Macro: prec=0.990 rec=0.990 f1=0.990
+[kaggle][NaiveBayes][Baseline][topN=2000]] Micro: prec=0.990 rec=0.990 f1=0.990
+[kaggle][NaiveBayes][Baseline][topN=2000]] ROC-AUC: 0.999
+[kaggle][NaiveBayes][Baseline][topN=2000]] PR-AUC:  0.999
+
+=== Train2 (Naive Bayes) ===
+[train2] Test split distribution: pos=839 neg=3367 (n=4206)
+[train2][NaiveBayes][Baseline][topN=2000]] Acc=0.796  Prec(pos=1)=0.489  Rec(pos=1)=0.509
+[train2][NaiveBayes][Baseline][topN=2000]] Confusion Matrix:
+[[2921  446]
+ [ 412  427]]
+[train2][NaiveBayes][Baseline][topN=2000]] Per-class:
+  class 0: prec=0.876 rec=0.868 f1=0.872 support=3367
+  class 1: prec=0.489 rec=0.509 f1=0.499 support=839
+[train2][NaiveBayes][Baseline][topN=2000]] Macro: prec=0.683 rec=0.688 f1=0.685
+[train2][NaiveBayes][Baseline][topN=2000]] Micro: prec=0.796 rec=0.796 f1=0.796
+[train2][NaiveBayes][Baseline][topN=2000]] ROC-AUC: 0.780
+[train2][NaiveBayes][Baseline][topN=2000]] PR-AUC:  0.504
+
+=== Webis (Naive Bayes) ===
+[webis] Test split distribution: pos=920 neg=2977 (n=3897)
+[webis][NaiveBayes][Baseline][topN=2000]] Acc=0.814  Prec(pos=1)=0.606  Rec(pos=1)=0.610
+[webis][NaiveBayes][Baseline][topN=2000]] Confusion Matrix:
+[[2613  364]
+ [ 359  561]]
+[webis][NaiveBayes][Baseline][topN=2000]] Per-class:
+  class 0: prec=0.879 rec=0.878 f1=0.878 support=2977
+  class 1: prec=0.606 rec=0.610 f1=0.608 support=920
+[webis][NaiveBayes][Baseline][topN=2000]] Macro: prec=0.743 rec=0.744 f1=0.743
+[webis][NaiveBayes][Baseline][topN=2000]] Micro: prec=0.814 rec=0.814 f1=0.814
+[webis][NaiveBayes][Baseline][topN=2000]] ROC-AUC: 0.844
+[webis][NaiveBayes][Baseline][topN=2000]] PR-AUC:  0.634
+
+=== Naive Bayes (all additional features) ===
+
+=== Kaggle (Naive Bayes) ===
+[kaggle] Test split distribution: pos=3160 neg=3240 (n=6400)
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] Acc=0.955  Prec(pos=1)=0.958  Rec(pos=1)=0.950
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] Confusion Matrix:
+[[3110  130]
+ [ 159 3001]]
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] Per-class:
+  class 0: prec=0.951 rec=0.960 f1=0.956 support=3240
+  class 1: prec=0.958 rec=0.950 f1=0.954 support=3160
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] Macro: prec=0.955 rec=0.955 f1=0.955
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] Micro: prec=0.955 rec=0.955 f1=0.955
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] ROC-AUC: 0.992
+[kaggle][NaiveBayes][StopwordsRemoved][topN=2000]] PR-AUC:  0.992
+
+=== Train2 (Naive Bayes) ===
+[train2] Test split distribution: pos=839 neg=3367 (n=4206)
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] Acc=0.804  Prec(pos=1)=0.511  Rec(pos=1)=0.459
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] Confusion Matrix:
+[[2998  369]
+ [ 454  385]]
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] Per-class:
+  class 0: prec=0.868 rec=0.890 f1=0.879 support=3367
+  class 1: prec=0.511 rec=0.459 f1=0.483 support=839
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] Macro: prec=0.690 rec=0.675 f1=0.681
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] Micro: prec=0.804 rec=0.804 f1=0.804
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] ROC-AUC: 0.775
+[train2][NaiveBayes][StopwordsRemoved][topN=2000]] PR-AUC:  0.491
+
+=== Webis (Naive Bayes) ===
+[webis] Test split distribution: pos=920 neg=2977 (n=3897)
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] Acc=0.813  Prec(pos=1)=0.601  Rec(pos=1)=0.623
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] Confusion Matrix:
+[[2596  381]
+ [ 347  573]]
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] Per-class:
+  class 0: prec=0.882 rec=0.872 f1=0.877 support=2977
+  class 1: prec=0.601 rec=0.623 f1=0.612 support=920
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] Macro: prec=0.741 rec=0.747 f1=0.744
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] Micro: prec=0.813 rec=0.813 f1=0.813
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] ROC-AUC: 0.835
+[webis][NaiveBayes][StopwordsRemoved][topN=2000]] PR-AUC:  0.614

@@ -1,0 +1,87 @@
+=== SVM Baseline (defaults) ===
+
+=== Kaggle (SVM-SGD) ===
+[kaggle] Test split distribution: pos=3160 neg=3240 (n=6400)
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Acc=0.970  Prec(pos=1)=0.974  Rec(pos=1)=0.966
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Confusion Matrix:
+[[3160   80]
+ [ 109 3051]]
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Per-class:
+  class 0: prec=0.967 rec=0.975 f1=0.971 support=3240
+  class 1: prec=0.974 rec=0.966 f1=0.970 support=3160
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Macro: prec=0.971 rec=0.970 f1=0.970
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Micro: prec=0.970 rec=0.970 f1=0.970
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] ROC-AUC: 0.995
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] PR-AUC:  0.995
+
+=== Train2 (SVM-SGD) ===
+[train2] Test split distribution: pos=839 neg=3367 (n=4206)
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Acc=0.823  Prec(pos=1)=0.688  Rec(pos=1)=0.203
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Confusion Matrix:
+[[3290   77]
+ [ 669  170]]
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Per-class:
+  class 0: prec=0.831 rec=0.977 f1=0.898 support=3367
+  class 1: prec=0.688 rec=0.203 f1=0.313 support=839
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Macro: prec=0.760 rec=0.590 f1=0.606
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Micro: prec=0.823 rec=0.823 f1=0.823
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] ROC-AUC: 0.752
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] PR-AUC:  0.490
+
+=== Webis (SVM-SGD) ===
+[webis] Test split distribution: pos=920 neg=2977 (n=3897)
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Acc=0.819  Prec(pos=1)=0.711  Rec(pos=1)=0.396
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Confusion Matrix:
+[[2829  148]
+ [ 556  364]]
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Per-class:
+  class 0: prec=0.836 rec=0.950 f1=0.889 support=2977
+  class 1: prec=0.711 rec=0.396 f1=0.508 support=920
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Macro: prec=0.773 rec=0.673 f1=0.699
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Micro: prec=0.819 rec=0.819 f1=0.819
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] ROC-AUC: 0.826
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] PR-AUC:  0.629
+
+=== SVM (all additional features) ===
+
+=== Kaggle (SVM-SGD) ===
+[kaggle] Test split distribution: pos=3160 neg=3240 (n=6400)
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Acc=0.957  Prec(pos=1)=0.968  Rec(pos=1)=0.943
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Confusion Matrix:
+[[3141   99]
+ [ 179 2981]]
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Per-class:
+  class 0: prec=0.946 rec=0.969 f1=0.958 support=3240
+  class 1: prec=0.968 rec=0.943 f1=0.955 support=3160
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Macro: prec=0.957 rec=0.956 f1=0.957
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] Micro: prec=0.957 rec=0.957 f1=0.957
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] ROC-AUC: 0.991
+[kaggle][SVM-SGD][minDF2_alpha0.0001_l2] PR-AUC:  0.991
+
+=== Train2 (SVM-SGD) ===
+[train2] Test split distribution: pos=839 neg=3367 (n=4206)
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Acc=0.722  Prec(pos=1)=0.383  Rec(pos=1)=0.647
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Confusion Matrix:
+[[2492  875]
+ [ 296  543]]
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Per-class:
+  class 0: prec=0.894 rec=0.740 f1=0.810 support=3367
+  class 1: prec=0.383 rec=0.647 f1=0.481 support=839
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Macro: prec=0.638 rec=0.694 f1=0.645
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] Micro: prec=0.722 rec=0.722 f1=0.722
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] ROC-AUC: 0.758
+[train2][SVM-SGD][minDF2_alpha0.0001_l2] PR-AUC:  0.461
+
+=== Webis (SVM-SGD) ===
+[webis] Test split distribution: pos=920 neg=2977 (n=3897)
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Acc=0.784  Prec(pos=1)=0.532  Rec(pos=1)=0.716
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Confusion Matrix:
+[[2397  580]
+ [ 261  659]]
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Per-class:
+  class 0: prec=0.902 rec=0.805 f1=0.851 support=2977
+  class 1: prec=0.532 rec=0.716 f1=0.610 support=920
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Macro: prec=0.717 rec=0.761 f1=0.731
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] Micro: prec=0.784 rec=0.784 f1=0.784
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] ROC-AUC: 0.834
+[webis][SVM-SGD][minDF2_alpha0.0001_l2] PR-AUC:  0.613

@@ -20,10 +20,10 @@ IGNORE_TERMS = {
     "yourself","yourselves","ourselves","himself","herself","themselves"
 }
 
-SUPERLATIVE_TERMS = {
-    "best","top","most","greatest","ultimate","amazing","incredible","unbelievable","shocking",
-    "craziest","wildest","epic","insane","must-see"
-}
+# SUPERLATIVE_TERMS = {
+#     "best","top","most","greatest","ultimate","amazing","incredible","unbelievable","shocking",
+#     "craziest","wildest","epic","insane","must-see"
+# }
 
 # description: gives word tokens from a given input text
 # params: text (str)

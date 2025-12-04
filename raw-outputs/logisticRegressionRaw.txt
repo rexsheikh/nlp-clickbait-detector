@@ -1,0 +1,87 @@
+=== Logistic Regression Baseline (defaults) ===
+
+=== Kaggle (Logistic Regression) ===
+[kaggle] Test split distribution: pos=3160 neg=3240 (n=6400)
+[kaggle][LogReg][minDF2_C1.0] Acc=0.964  Prec(pos=1)=0.973  Rec(pos=1)=0.954
+[kaggle][LogReg][minDF2_C1.0] Confusion Matrix:
+[[3155   85]
+ [ 146 3014]]
+[kaggle][LogReg][minDF2_C1.0] Per-class:
+  class 0: prec=0.956 rec=0.974 f1=0.965 support=3240
+  class 1: prec=0.973 rec=0.954 f1=0.963 support=3160
+[kaggle][LogReg][minDF2_C1.0] Macro: prec=0.964 rec=0.964 f1=0.964
+[kaggle][LogReg][minDF2_C1.0] Micro: prec=0.964 rec=0.964 f1=0.964
+[kaggle][LogReg][minDF2_C1.0] ROC-AUC: 0.994
+[kaggle][LogReg][minDF2_C1.0] PR-AUC:  0.994
+
+=== Train2 (Logistic Regression) ===
+[train2] Test split distribution: pos=839 neg=3367 (n=4206)
+[train2][LogReg][minDF2_C1.0] Acc=0.823  Prec(pos=1)=0.669  Rec(pos=1)=0.224
+[train2][LogReg][minDF2_C1.0] Confusion Matrix:
+[[3274   93]
+ [ 651  188]]
+[train2][LogReg][minDF2_C1.0] Per-class:
+  class 0: prec=0.834 rec=0.972 f1=0.898 support=3367
+  class 1: prec=0.669 rec=0.224 f1=0.336 support=839
+[train2][LogReg][minDF2_C1.0] Macro: prec=0.752 rec=0.598 f1=0.617
+[train2][LogReg][minDF2_C1.0] Micro: prec=0.823 rec=0.823 f1=0.823
+[train2][LogReg][minDF2_C1.0] ROC-AUC: 0.777
+[train2][LogReg][minDF2_C1.0] PR-AUC:  0.506
+
+=== Webis (Logistic Regression) ===
+[webis] Test split distribution: pos=920 neg=2977 (n=3897)
+[webis][LogReg][minDF2_C1.0] Acc=0.816  Prec(pos=1)=0.713  Rec(pos=1)=0.371
+[webis][LogReg][minDF2_C1.0] Confusion Matrix:
+[[2840  137]
+ [ 579  341]]
+[webis][LogReg][minDF2_C1.0] Per-class:
+  class 0: prec=0.831 rec=0.954 f1=0.888 support=2977
+  class 1: prec=0.713 rec=0.371 f1=0.488 support=920
+[webis][LogReg][minDF2_C1.0] Macro: prec=0.772 rec=0.662 f1=0.688
+[webis][LogReg][minDF2_C1.0] Micro: prec=0.816 rec=0.816 f1=0.816
+[webis][LogReg][minDF2_C1.0] ROC-AUC: 0.841
+[webis][LogReg][minDF2_C1.0] PR-AUC:  0.639
+
+=== Logistic Regression (all additional features) ===
+
+=== Kaggle (Logistic Regression) ===
+[kaggle] Test split distribution: pos=3160 neg=3240 (n=6400)
+[kaggle][LogReg][minDF2_C1.0] Acc=0.950  Prec(pos=1)=0.965  Rec(pos=1)=0.933
+[kaggle][LogReg][minDF2_C1.0] Confusion Matrix:
+[[3133  107]
+ [ 211 2949]]
+[kaggle][LogReg][minDF2_C1.0] Per-class:
+  class 0: prec=0.937 rec=0.967 f1=0.952 support=3240
+  class 1: prec=0.965 rec=0.933 f1=0.949 support=3160
+[kaggle][LogReg][minDF2_C1.0] Macro: prec=0.951 rec=0.950 f1=0.950
+[kaggle][LogReg][minDF2_C1.0] Micro: prec=0.950 rec=0.950 f1=0.950
+[kaggle][LogReg][minDF2_C1.0] ROC-AUC: 0.990
+[kaggle][LogReg][minDF2_C1.0] PR-AUC:  0.990
+
+=== Train2 (Logistic Regression) ===
+[train2] Test split distribution: pos=839 neg=3367 (n=4206)
+[train2][LogReg][minDF2_C1.0] Acc=0.738  Prec(pos=1)=0.401  Rec(pos=1)=0.633
+[train2][LogReg][minDF2_C1.0] Confusion Matrix:
+[[2573  794]
+ [ 308  531]]
+[train2][LogReg][minDF2_C1.0] Per-class:
+  class 0: prec=0.893 rec=0.764 f1=0.824 support=3367
+  class 1: prec=0.401 rec=0.633 f1=0.491 support=839
+[train2][LogReg][minDF2_C1.0] Macro: prec=0.647 rec=0.699 f1=0.657
+[train2][LogReg][minDF2_C1.0] Micro: prec=0.738 rec=0.738 f1=0.738
+[train2][LogReg][minDF2_C1.0] ROC-AUC: 0.768
+[train2][LogReg][minDF2_C1.0] PR-AUC:  0.482
+
+=== Webis (Logistic Regression) ===
+[webis] Test split distribution: pos=920 neg=2977 (n=3897)
+[webis][LogReg][minDF2_C1.0] Acc=0.790  Prec(pos=1)=0.543  Rec(pos=1)=0.701
+[webis][LogReg][minDF2_C1.0] Confusion Matrix:
+[[2434  543]
+ [ 275  645]]
+[webis][LogReg][minDF2_C1.0] Per-class:
+  class 0: prec=0.898 rec=0.818 f1=0.856 support=2977
+  class 1: prec=0.543 rec=0.701 f1=0.612 support=920
+[webis][LogReg][minDF2_C1.0] Macro: prec=0.721 rec=0.759 f1=0.734
+[webis][LogReg][minDF2_C1.0] Micro: prec=0.790 rec=0.790 f1=0.790
+[webis][LogReg][minDF2_C1.0] ROC-AUC: 0.840
+[webis][LogReg][minDF2_C1.0] PR-AUC:  0.631
