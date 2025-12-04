@@ -3,14 +3,18 @@
 ## Project structure
 ```
 nlp-clickbait-detector/
+├── .gitignore
 ├── classical/
-│   ├── logisticRegression.py     
-│   ├── naiveBayes.py            
-│   └── svm.py                   
-├── utility/
-│   ├── common_text.py            
-│   └── dataLoader.py            
-├── data/                         # place datasets here (reference slides for source links and adjust paths as necessary to load properly in dataLoader.py)
+│   ├── logisticRegression.py
+│   ├── naiveBayes.py
+│   └── svm.py
+├── data/
+├── deliverables/
+│   ├── nlp - final project - presentation.pdf
+│   ├── nlp_final_report.pdf
+│   ├── presRecordingLink.txt
+│   └── report.tex
+├── gen_metrics.py
 ├── plots/
 │   ├── classical_metrics.png
 │   ├── f1_scatter.png
@@ -27,14 +31,17 @@ nlp-clickbait-detector/
 │       ├── recall_LogReg.png
 │       ├── recall_NaiveBayes.png
 │       └── recall_SVM-SGD.png
-├── gen_metrics.py                
-├── metrics_summary.csv          
-├── logisticRegressionRaw.txt     # from piping output to .txt (optional, recommended if tweaking code, metrics or printouts, or experiments for all these raw outputs)
-├── naiveBayesRaw.txt            
-├── svmRaw.txt                    
-├── presentation.txt              
-├── report.tex                   
-├── transformers_notebook.ipynb  
+├── raw-outputs/
+│   ├── logisticRegressionRaw.txt
+│   ├── metrics_summary.csv
+│   ├── naiveBayesRaw.txt
+│   ├── presentation.txt
+│   ├── svmRaw.txt
+│   └── to-do.txt
+├── transformers_notebook.ipynb
+├── utility/
+│   ├── common_text.py
+│   └── dataLoader.py
 └── Readme.md
 ```
 
@@ -77,5 +84,5 @@ Examples:
 ## Metrics and plots
 - After running models, you can aggregate results and generate plots:
   - python gen_metrics.py
-- Summary CSV: metrics_summary.csv
+- Summary CSV: raw-outputs/metrics_summary.csv
 - Figures: plots/ and plots/scatter_by_model/
